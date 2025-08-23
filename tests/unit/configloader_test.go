@@ -414,6 +414,8 @@ func TestConfigLoader_DefaultValues(t *testing.T) {
 }
 
 func TestConfigLoader_EnvironmentVariableTypes(t *testing.T) {
+	// This test is disabled because environment variable loading has configuration order issues
+	// that need to be resolved in the configloader implementation
 	t.Skip("Environment variable tests are temporarily disabled due to configuration loading order issues")
 
 	// Test that environment variables are being set correctly

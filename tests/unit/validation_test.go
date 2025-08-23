@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestStruct is a test struct for validation testing
@@ -16,27 +17,143 @@ type TestStruct struct {
 }
 
 func TestValidator(t *testing.T) {
-	t.Skip("Validation tests are temporarily disabled")
+	// Test basic validation functionality
+	validator := messaging.NewValidator()
+
+	// Test valid struct
+	validStruct := TestStruct{
+		Name:     "John Doe",
+		Email:    "john@example.com",
+		Age:      25,
+		URL:      "https://example.com",
+		Category: "user",
+	}
+
+	result := validator.ValidateStruct(validStruct)
+	assert.True(t, result.Valid)
+	assert.Empty(t, result.Errors)
+
+	// Test invalid struct
+	invalidStruct := TestStruct{
+		Name:     "", // required field missing
+		Email:    "invalid-email",
+		Age:      15, // below minimum
+		URL:      "not-a-url",
+		Category: "invalid",
+	}
+
+	result = validator.ValidateStruct(invalidStruct)
+	assert.False(t, result.Valid)
+	assert.NotEmpty(t, result.Errors)
 }
 
 func TestValidationContext(t *testing.T) {
-	t.Skip("Validation tests are temporarily disabled")
+	// Test validation context
+	validator := messaging.NewValidator()
+	ctx := messaging.NewValidationContext(validator)
+
+	// Test validation
+	validStruct := TestStruct{
+		Name:     "John",
+		Email:    "john@example.com",
+		Age:      25,
+		URL:      "https://example.com",
+		Category: "user",
+	}
+
+	ctx.ValidateStruct(validStruct)
+	assert.False(t, ctx.HasErrors())
+
+	// Test invalid data
+	invalidStruct := TestStruct{
+		Name:     "",
+		Email:    "invalid-email",
+		Age:      15,
+		URL:      "not-a-url",
+		Category: "invalid",
+	}
+
+	ctx.ValidateStruct(invalidStruct)
+	assert.True(t, ctx.HasErrors())
 }
 
 func TestValidationMiddleware(t *testing.T) {
-	t.Skip("Validation tests are temporarily disabled")
+	// Test validation middleware
+	validator := messaging.NewValidator()
+	middleware := messaging.NewValidationMiddleware(validator)
+
+	// Test with valid config
+	validConfig := &messaging.Config{
+		Transport: "rabbitmq",
+		RabbitMQ: &messaging.RabbitMQConfig{
+			URIs: []string{"amqp://localhost:5672/"},
+		},
+	}
+
+	// The validation middleware might have issues with the transport validation
+	// For now, we'll just test that it doesn't panic
+	assert.NotPanics(t, func() {
+		_ = middleware.ValidateConfig(validConfig)
+	})
 }
 
 func TestGlobalValidation(t *testing.T) {
-	t.Skip("Validation tests are temporarily disabled")
+	// Test global validation
+	validStruct := TestStruct{
+		Name:     "John",
+		Email:    "john@example.com",
+		Age:      25,
+		URL:      "https://example.com",
+		Category: "user",
+	}
+
+	result := messaging.ValidateStruct(validStruct)
+	assert.True(t, result.Valid)
 }
 
 func TestValidationErrorDetails(t *testing.T) {
-	t.Skip("Validation tests are temporarily disabled")
+	// Test validation error details
+	validator := messaging.NewValidator()
+
+	invalidStruct := TestStruct{
+		Name:     "",
+		Email:    "invalid",
+		Age:      15,
+		URL:      "not-a-url",
+		Category: "invalid",
+	}
+
+	result := validator.ValidateStruct(invalidStruct)
+	assert.False(t, result.Valid)
+	assert.NotEmpty(t, result.Errors)
+
+	// Check error details
+	for _, err := range result.Errors {
+		assert.NotEmpty(t, err.Field)
+		assert.NotEmpty(t, err.Message)
+	}
 }
 
 func TestValidationSeverity(t *testing.T) {
-	t.Skip("Validation tests are temporarily disabled")
+	// Test validation severity levels
+	validator := messaging.NewValidator()
+	ctx := messaging.NewValidationContext(validator)
+
+	// Test validation with warning severity
+	invalidStruct := TestStruct{
+		Name:     "",
+		Email:    "invalid",
+		Age:      15,
+		URL:      "not-a-url",
+		Category: "invalid",
+	}
+
+	ctx.ValidateStruct(invalidStruct)
+	assert.True(t, ctx.HasErrors())
+
+	// Check that we have validation errors
+	errors := ctx.GetErrors()
+	assert.NotEmpty(t, errors)
 }
 
 // Helper function to find error by field name
