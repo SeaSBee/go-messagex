@@ -11,6 +11,7 @@ import (
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/seasbee/go-logx"
+
 	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
@@ -315,7 +316,6 @@ func (ac *AdvancedConsumer) Start(ctx context.Context, handler messaging.Handler
 		ac.config.NoWait,    // no-wait
 		ac.config.Arguments, // args
 	)
-
 	if err != nil {
 		return messaging.WrapError(messaging.ErrorCodeConsume, "start", "failed to start consuming", err)
 	}

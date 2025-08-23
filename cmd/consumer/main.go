@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/seasbee/go-logx"
+
 	"github.com/seasbee/go-messagex/internal/configloader"
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/seasbee/go-messagex/pkg/rabbitmq"
@@ -434,11 +434,15 @@ func main() {
 
 	if cli.interactive {
 		if err := cli.runInteractive(); err != nil {
-			log.Fatalf("Interactive mode failed: %v", err)
+			logx.Fatal("Interactive mode failed",
+				logx.String("error", err.Error()),
+			)
 		}
 	} else {
 		if err := cli.runBatch(); err != nil {
-			log.Fatalf("Batch mode failed: %v", err)
+			logx.Fatal("Batch mode failed",
+				logx.String("error", err.Error()),
+			)
 		}
 	}
 }

@@ -11,9 +11,11 @@ import (
 )
 
 // Custom context key types to avoid collisions
-type telemetryStartKey struct{}
-type telemetryDeliveryKey struct{}
-type telemetryHandlerStartKey struct{}
+type (
+	telemetryStartKey        struct{}
+	telemetryDeliveryKey     struct{}
+	telemetryHandlerStartKey struct{}
+)
 
 // SamplingConfig defines sampling configuration for telemetry.
 type SamplingConfig struct {

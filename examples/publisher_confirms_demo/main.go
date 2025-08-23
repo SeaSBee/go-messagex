@@ -3,17 +3,22 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"time"
 
+	"github.com/seasbee/go-logx"
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
 
 func main() {
-	fmt.Println("🐰 Publisher Confirms Demo")
-	fmt.Println("==========================")
+	// Initialize go-logx
+	if err := logx.InitDefault(); err != nil {
+		panic("Failed to initialize logger: " + err.Error())
+	}
+	defer logx.Sync()
+
+	logx.Info("🐰 Publisher Confirms Demo")
+	logx.Info("==========================")
 
 	// Example 1: Publisher with confirms enabled
 	demonstratePublisherWithConfirms()
@@ -27,12 +32,12 @@ func main() {
 	// Example 4: Receipt handling
 	demonstrateReceiptHandling()
 
-	fmt.Println("✅ Demo completed successfully!")
+	logx.Info("✅ Demo completed successfully!")
 }
 
 func demonstratePublisherWithConfirms() {
-	fmt.Println("\n📝 Example 1: Publisher with Confirms Enabled")
-	fmt.Println("----------------------------------------------")
+	logx.Info("📝 Example 1: Publisher with Confirms Enabled")
+	logx.Info("----------------------------------------------")
 
 	// Configure RabbitMQ with publisher confirms enabled
 	config := &messaging.RabbitMQConfig{
@@ -58,18 +63,18 @@ func demonstratePublisherWithConfirms() {
 	// Create observability context
 	obsProvider, err := messaging.NewObservabilityProvider(&messaging.TelemetryConfig{})
 	if err != nil {
-		log.Printf("Failed to create observability provider: %v", err)
+		logx.Error("Failed to create observability provider", logx.ErrorField(err))
 		return
 	}
 	obsCtx := messaging.NewObservabilityContext(context.Background(), obsProvider)
 
 	// Create transport
 	transport := rabbitmq.NewTransport(config, obsCtx)
-	fmt.Printf("✅ Created transport (connection pooling enabled)\n")
+	logx.Info("✅ Created transport", logx.String("connection_pooling", "enabled"))
 
 	// Create publisher
 	publisher := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
-	fmt.Printf("✅ Created publisher (confirms enabled: %v)\n", config.Publisher.Confirms)
+	logx.Info("✅ Created publisher", logx.Bool("confirms_enabled", config.Publisher.Confirms))
 
 	// Demonstrate message publishing with confirms
 	ctx := context.Background()
@@ -85,7 +90,7 @@ func demonstratePublisherWithConfirms() {
 		},
 	}
 
-	fmt.Printf("📤 Publishing message: %s\n", message.ID)
+	logx.Info("📤 Publishing message", logx.String("message_id", message.ID))
 
 	// Note: In a real environment with RabbitMQ running, this would:
 	// 1. Enable confirm mode on the channel
@@ -94,32 +99,32 @@ func demonstratePublisherWithConfirms() {
 	// 4. Return a receipt that completes when broker confirms
 	receipt, err := publisher.PublishAsync(ctx, "demo.exchange", message)
 	if err != nil {
-		log.Printf("❌ Failed to publish message: %v", err)
+		logx.Error("❌ Failed to publish message", logx.ErrorField(err), logx.String("message_id", message.ID))
 	} else {
-		fmt.Printf("🎫 Received receipt for message: %s\n", receipt.ID())
+		logx.Info("🎫 Received receipt for message", logx.String("receipt_id", receipt.ID()))
 
 		// In a real environment, you would wait for confirmation:
 		// select {
 		// case <-receipt.Done():
 		//     result, err := receipt.Result()
 		//     if err != nil {
-		//         fmt.Printf("❌ Message failed: %v\n", err)
+		//         logx.Error("❌ Message failed", logx.ErrorField(err))
 		//     } else {
-		//         fmt.Printf("✅ Message confirmed: delivery tag %d\n", result.DeliveryTag)
+		//         logx.Info("✅ Message confirmed", logx.Int("delivery_tag", result.DeliveryTag))
 		//     }
 		// case <-time.After(10 * time.Second):
-		//     fmt.Printf("⏰ Confirmation timeout\n")
+		//     logx.Warn("⏰ Confirmation timeout")
 		// }
 	}
 
 	// Close publisher
 	publisher.Close(ctx)
-	fmt.Printf("🔒 Publisher closed\n")
+	logx.Info("🔒 Publisher closed")
 }
 
 func demonstratePublisherWithoutConfirms() {
-	fmt.Println("\n📝 Example 2: Publisher with Confirms Disabled")
-	fmt.Println("-----------------------------------------------")
+	logx.Info("📝 Example 2: Publisher with Confirms Disabled")
+	logx.Info("-----------------------------------------------")
 
 	config := &messaging.RabbitMQConfig{
 		URIs: []string{"amqp://localhost:5672"},
@@ -140,7 +145,7 @@ func demonstratePublisherWithoutConfirms() {
 
 	obsProvider, err := messaging.NewObservabilityProvider(&messaging.TelemetryConfig{})
 	if err != nil {
-		log.Printf("Failed to create observability provider: %v", err)
+		logx.Error("Failed to create observability provider", logx.ErrorField(err))
 		return
 	}
 	obsCtx := messaging.NewObservabilityContext(context.Background(), obsProvider)
@@ -148,16 +153,16 @@ func demonstratePublisherWithoutConfirms() {
 	transport := rabbitmq.NewTransport(config, obsCtx)
 	publisher := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
 
-	fmt.Printf("✅ Created publisher (confirms disabled)\n")
-	fmt.Printf("⚡ Receipts complete immediately after publish (fire-and-forget)\n")
+	logx.Info("✅ Created publisher", logx.Bool("confirms_disabled", true))
+	logx.Info("⚡ Receipts complete immediately after publish", logx.String("mode", "fire-and-forget"))
 
 	publisher.Close(context.Background())
-	fmt.Printf("🔒 Publisher closed\n")
+	logx.Info("🔒 Publisher closed")
 }
 
 func demonstrateAdvancedPublisherConfirms() {
-	fmt.Println("\n📝 Example 3: Advanced Publisher with Confirms")
-	fmt.Println("----------------------------------------------")
+	logx.Info("📝 Example 3: Advanced Publisher with Confirms")
+	logx.Info("----------------------------------------------")
 
 	config := &messaging.PublisherConfig{
 		Confirms:       true,
@@ -168,7 +173,7 @@ func demonstrateAdvancedPublisherConfirms() {
 
 	obsProvider, err := messaging.NewObservabilityProvider(&messaging.TelemetryConfig{})
 	if err != nil {
-		log.Printf("Failed to create observability provider: %v", err)
+		logx.Error("Failed to create observability provider", logx.ErrorField(err))
 		return
 	}
 	obsCtx := messaging.NewObservabilityContext(context.Background(), obsProvider)
@@ -187,25 +192,29 @@ func demonstrateAdvancedPublisherConfirms() {
 
 	// Create advanced publisher
 	publisher := rabbitmq.NewAdvancedPublisher(transport, config, obsCtx)
-	fmt.Printf("✅ Created advanced publisher with confirms\n")
-	fmt.Printf("🚀 Supports: persistence, transformation, routing + confirms\n")
+	logx.Info("✅ Created advanced publisher", logx.Bool("confirms_enabled", true))
+	logx.Info("🚀 Advanced features",
+		logx.Bool("persistence", true),
+		logx.Bool("transformation", true),
+		logx.Bool("routing", true),
+		logx.Bool("confirms", true))
 
 	publisher.Close(context.Background())
-	fmt.Printf("🔒 Advanced publisher closed\n")
+	logx.Info("🔒 Advanced publisher closed")
 }
 
 func demonstrateReceiptHandling() {
-	fmt.Println("\n📝 Example 4: Receipt Handling")
-	fmt.Println("------------------------------")
+	logx.Info("📝 Example 4: Receipt Handling")
+	logx.Info("------------------------------")
 
 	// Create a receipt manager (used internally by publishers)
 	manager := messaging.NewReceiptManager(30 * time.Second)
-	fmt.Printf("✅ Created receipt manager\n")
+	logx.Info("✅ Created receipt manager")
 
 	// Create a receipt for tracking
 	ctx := context.Background()
 	receipt := manager.CreateReceipt(ctx, "test-message-123")
-	fmt.Printf("🎫 Created receipt for message: %s\n", receipt.ID())
+	logx.Info("🎫 Created receipt for message", logx.String("message_id", receipt.ID()))
 
 	// Simulate successful confirmation
 	go func() {
@@ -221,7 +230,7 @@ func demonstrateReceiptHandling() {
 
 		completed := manager.CompleteReceipt("test-message-123", result, nil)
 		if completed {
-			fmt.Printf("✅ Receipt completed successfully\n")
+			logx.Info("✅ Receipt completed successfully")
 		}
 	}()
 
@@ -230,17 +239,18 @@ func demonstrateReceiptHandling() {
 	case <-receipt.Done():
 		result, err := receipt.Result()
 		if err != nil {
-			fmt.Printf("❌ Receipt completed with error: %v\n", err)
+			logx.Error("❌ Receipt completed with error", logx.ErrorField(err))
 		} else {
-			fmt.Printf("🎉 Message confirmed! Delivery tag: %d, Timestamp: %v\n",
-				result.DeliveryTag, result.Timestamp.Format(time.RFC3339))
+			logx.Info("🎉 Message confirmed",
+				logx.Int64("delivery_tag", int64(result.DeliveryTag)),
+				logx.String("timestamp", result.Timestamp.Format(time.RFC3339)))
 		}
 	case <-time.After(5 * time.Second):
-		fmt.Printf("⏰ Receipt timeout\n")
+		logx.Warn("⏰ Receipt timeout")
 	}
 
-	fmt.Printf("📊 Pending receipts: %d\n", manager.PendingCount())
+	logx.Info("📊 Receipt statistics", logx.Int("pending_receipts", manager.PendingCount()))
 
 	manager.Close()
-	fmt.Printf("🔒 Receipt manager closed\n")
+	logx.Info("🔒 Receipt manager closed")
 }

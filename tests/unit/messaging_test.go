@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
 func TestMessage(t *testing.T) {

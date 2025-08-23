@@ -9,6 +9,7 @@ import (
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/seasbee/go-logx"
+
 	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
@@ -202,7 +203,7 @@ func (ap *AsyncPublisher) PublishAsync(ctx context.Context, topic string, msg me
 			return receipt, nil
 		case <-ctx.Done():
 			ap.receiptManager.CompleteReceipt(msg.ID, messaging.PublishResult{},
-				messaging.WrapError(messaging.ErrorCodePublish, "publish_async", "context cancelled", ctx.Err()))
+				messaging.WrapError(messaging.ErrorCodePublish, "publish_async", "context canceled", ctx.Err()))
 			return receipt, ctx.Err()
 		}
 	}

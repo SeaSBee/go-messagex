@@ -95,7 +95,7 @@ type DiskMessageStorage struct {
 // NewDiskMessageStorage creates a new disk message storage.
 func NewDiskMessageStorage(config *MessagePersistenceConfig) (*DiskMessageStorage, error) {
 	// Create storage directory if it doesn't exist
-	if err := os.MkdirAll(config.StoragePath, 0755); err != nil {
+	if err := os.MkdirAll(config.StoragePath, 0o755); err != nil {
 		return nil, WrapError(ErrorCodePersistence, "new_disk_storage", "failed to create storage directory", err)
 	}
 
@@ -120,7 +120,7 @@ func (d *DiskMessageStorage) Store(ctx context.Context, message *Message) error 
 	}
 
 	// Write to file
-	if err := os.WriteFile(messagePath, data, 0644); err != nil {
+	if err := os.WriteFile(messagePath, data, 0o644); err != nil {
 		return WrapError(ErrorCodePersistence, "store", "failed to write message file", err)
 	}
 

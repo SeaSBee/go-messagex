@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/seasbee/go-messagex/pkg/rabbitmq"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestRabbitMQTransport(t *testing.T) {

@@ -61,8 +61,8 @@ package main
 
 import (
     "context"
-    "log"
     
+    "github.com/seasbee/go-logx"
     "github.com/seasbee/go-messagex/pkg/messaging"
     "github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
@@ -81,7 +81,7 @@ func main() {
     // Create publisher
     publisher, err := messaging.NewPublisher(ctx, config)
     if err != nil {
-        log.Fatal(err)
+        logx.Fatal(err)
     }
     defer publisher.Close(ctx)
     
@@ -96,7 +96,7 @@ func main() {
     // Publish message
     receipt, err := publisher.PublishAsync(ctx, "exchange.name", msg)
     if err != nil {
-        log.Fatal(err)
+        logx.Fatal(err)
     }
     
     // Wait for confirmation
@@ -104,12 +104,12 @@ func main() {
     case <-receipt.Done():
         result, err := receipt.Result()
         if err != nil {
-            log.Printf("Publish failed: %v", err)
+            logx.Errorf("Publish failed: %v", err)
         } else {
-            log.Printf("Message published successfully")
+            logx.Info("Message published successfully")
         }
     case <-ctx.Done():
-        log.Printf("Publish timeout")
+        logx.Warn("Publish timeout")
     }
 }
 ```

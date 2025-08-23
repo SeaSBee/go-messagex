@@ -83,7 +83,6 @@ func (mp *MessagePersistence) Store(ctx context.Context, message *Message) error
 
 	start := time.Now()
 	err := mp.storage.Store(ctx, message)
-
 	if err != nil {
 		mp.observability.RecordPersistenceMetrics("store", time.Since(start), false, "storage_failed")
 		return WrapError(ErrorCodePersistence, "store", "failed to store message", err)
@@ -104,7 +103,6 @@ func (mp *MessagePersistence) Retrieve(ctx context.Context, messageID string) (*
 
 	start := time.Now()
 	message, err := mp.storage.Retrieve(ctx, messageID)
-
 	if err != nil {
 		mp.observability.RecordPersistenceMetrics("retrieve", time.Since(start), false, "retrieve_failed")
 		return nil, WrapError(ErrorCodePersistence, "retrieve", "failed to retrieve message", err)
@@ -125,7 +123,6 @@ func (mp *MessagePersistence) Delete(ctx context.Context, messageID string) erro
 
 	start := time.Now()
 	err := mp.storage.Delete(ctx, messageID)
-
 	if err != nil {
 		mp.observability.RecordPersistenceMetrics("delete", time.Since(start), false, "delete_failed")
 		return WrapError(ErrorCodePersistence, "delete", "failed to delete message", err)

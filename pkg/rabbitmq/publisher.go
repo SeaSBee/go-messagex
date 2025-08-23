@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/seasbee/go-logx"
+
 	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 

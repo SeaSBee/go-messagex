@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
-	"github.com/seasbee/go-messagex/pkg/messaging"
-	"github.com/seasbee/go-messagex/pkg/rabbitmq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
 
 func TestConnectionPool(t *testing.T) {
@@ -43,13 +44,22 @@ func TestConnectionPool(t *testing.T) {
 
 		pool := rabbitmq.NewConnectionPool(config, logger, metrics)
 
-		// Test getting connection (will fail without real RabbitMQ)
+		// Test getting connection (may succeed if RabbitMQ is running locally)
 		ctx := context.Background()
 		conn, err := pool.GetConnection(ctx, "amqp://localhost:5672")
 
-		// Should fail without real RabbitMQ, but pool should be created
-		assert.Error(t, err)
-		assert.Nil(t, conn)
+		// Connection may succeed if RabbitMQ is running locally
+		if err != nil {
+			// Expected failure without real RabbitMQ
+			assert.Nil(t, conn)
+		} else {
+			// Connection succeeded, verify it's valid
+			assert.NotNil(t, conn)
+			// Clean up the connection
+			if conn != nil {
+				conn.Close()
+			}
+		}
 	})
 
 	t.Run("ConnectionPoolStats", func(t *testing.T) {
@@ -221,9 +231,18 @@ func TestPooledTransport(t *testing.T) {
 		ctx := context.Background()
 		channel, err := transport.GetChannel(ctx)
 
-		// Should fail without real RabbitMQ
-		assert.Error(t, err)
-		assert.Nil(t, channel)
+		// Channel may succeed if RabbitMQ is running locally
+		if err != nil {
+			// Expected failure without real connection
+			assert.Nil(t, channel)
+		} else {
+			// Channel succeeded, verify it's valid
+			assert.NotNil(t, channel)
+			// Clean up the channel
+			if channel != nil {
+				channel.Close()
+			}
+		}
 	})
 
 	t.Run("PooledTransportClose", func(t *testing.T) {

@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seasbee/go-messagex/internal/configloader"
-	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seasbee/go-messagex/internal/configloader"
+	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
 func TestConfigLoader_LoadFromBytes(t *testing.T) {

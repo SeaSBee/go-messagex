@@ -2,20 +2,24 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/seasbee/go-logx"
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
 
 func main() {
-	fmt.Println("🚀 RabbitMQ Connection Pool Demo")
-	fmt.Println("==================================")
+	// Initialize go-logx
+	if err := logx.InitDefault(); err != nil {
+		panic("Failed to initialize logger: " + err.Error())
+	}
+	defer logx.Sync()
+
+	logx.Info("🚀 RabbitMQ Connection Pool Demo", logx.String("status", "starting"))
 
 	// Create configuration with connection pooling
 	config := &messaging.RabbitMQConfig{
@@ -73,7 +77,8 @@ func main() {
 	// Create observability provider
 	obsProvider, err := messaging.NewObservabilityProvider(&messaging.TelemetryConfig{})
 	if err != nil {
-		log.Fatalf("Failed to create observability provider: %v", err)
+		logx.Error("Failed to create observability provider", logx.ErrorField(err))
+		os.Exit(1)
 	}
 
 	// Create observability context
@@ -81,7 +86,7 @@ func main() {
 
 	// Create pooled transport
 	transport := rabbitmq.NewPooledTransport(config, obsCtx)
-	fmt.Println("✅ Created pooled transport")
+	logx.Info("Created pooled transport", logx.String("status", "success"))
 
 	// Set up graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -93,18 +98,18 @@ func main() {
 
 	go func() {
 		<-sigChan
-		fmt.Println("\n🛑 Shutdown signal received, closing transport...")
+		logx.Info("Shutdown signal received, closing transport", logx.String("action", "shutdown"))
 		cancel()
 	}()
 
 	// Connect to RabbitMQ
-	fmt.Println("🔌 Connecting to RabbitMQ...")
+	logx.Info("Connecting to RabbitMQ", logx.String("uri", config.URIs[0]))
 	if err := transport.Connect(ctx); err != nil {
-		log.Printf("⚠️  Connection failed (expected without RabbitMQ): %v", err)
-		fmt.Println("📊 This demo shows the connection pool structure and configuration")
-		fmt.Println("   To test with real RabbitMQ, start a RabbitMQ server and update the URI")
+		logx.Warn("Connection failed (expected without RabbitMQ)",
+			logx.ErrorField(err),
+			logx.String("note", "This demo shows the connection pool structure and configuration. To test with real RabbitMQ, start a RabbitMQ server and update the URI"))
 	} else {
-		fmt.Println("✅ Connected to RabbitMQ")
+		logx.Info("Connected to RabbitMQ", logx.String("status", "success"))
 		defer transport.Disconnect(ctx)
 	}
 
@@ -116,7 +121,7 @@ func main() {
 		PublishTimeout: 2 * time.Second,
 	}
 	publisher := rabbitmq.NewPublisher(transport.Transport, publisherConfig, obsCtx)
-	fmt.Println("✅ Created publisher")
+	logx.Info("Created publisher", logx.String("status", "success"))
 
 	// Create consumer
 	consumerConfig := &messaging.ConsumerConfig{
@@ -127,44 +132,45 @@ func main() {
 		HandlerTimeout:        30 * time.Second,
 	}
 	consumer := rabbitmq.NewConsumer(transport.Transport, consumerConfig, obsCtx)
-	fmt.Println("✅ Created consumer")
+	logx.Info("Created consumer", logx.String("status", "success"))
 
 	// Create message handler
 	handler := messaging.HandlerFunc(func(ctx context.Context, delivery messaging.Delivery) (messaging.AckDecision, error) {
-		fmt.Printf("📨 Received message: %s\n", delivery.Message.ID)
+		logx.Info("Received message",
+			logx.String("message_id", delivery.Message.ID),
+			logx.String("queue", delivery.Queue),
+			logx.String("routing_key", delivery.RoutingKey))
 		return messaging.Ack, nil
 	})
 
 	// Start consumer
-	fmt.Println("🔄 Starting consumer...")
+	logx.Info("Starting consumer")
 	if err := consumer.Start(ctx, handler); err != nil {
-		log.Printf("⚠️  Failed to start consumer: %v", err)
+		logx.Warn("Failed to start consumer", logx.ErrorField(err))
 	} else {
-		fmt.Println("✅ Consumer started")
+		logx.Info("Consumer started", logx.String("status", "success"))
 		defer consumer.Stop(ctx)
 	}
 
 	// Demo connection pool features
-	fmt.Println("\n🔧 Connection Pool Features Demo:")
-	fmt.Println("==================================")
+	logx.Info("Connection Pool Features Demo", logx.String("section", "configuration"))
 
 	// Show connection pool configuration
-	fmt.Printf("📋 Connection Pool Config:\n")
-	fmt.Printf("   Min Connections: %d\n", config.ConnectionPool.Min)
-	fmt.Printf("   Max Connections: %d\n", config.ConnectionPool.Max)
-	fmt.Printf("   Health Check Interval: %v\n", config.ConnectionPool.HealthCheckInterval)
-	fmt.Printf("   Connection Timeout: %v\n", config.ConnectionPool.ConnectionTimeout)
-	fmt.Printf("   Heartbeat Interval: %v\n", config.ConnectionPool.HeartbeatInterval)
+	logx.Info("Connection Pool Config",
+		logx.Int("min_connections", config.ConnectionPool.Min),
+		logx.Int("max_connections", config.ConnectionPool.Max),
+		logx.String("health_check_interval", config.ConnectionPool.HealthCheckInterval.String()),
+		logx.String("connection_timeout", config.ConnectionPool.ConnectionTimeout.String()),
+		logx.String("heartbeat_interval", config.ConnectionPool.HeartbeatInterval.String()))
 
-	fmt.Printf("\n📋 Channel Pool Config:\n")
-	fmt.Printf("   Min Channels per Connection: %d\n", config.ChannelPool.PerConnectionMin)
-	fmt.Printf("   Max Channels per Connection: %d\n", config.ChannelPool.PerConnectionMax)
-	fmt.Printf("   Borrow Timeout: %v\n", config.ChannelPool.BorrowTimeout)
-	fmt.Printf("   Health Check Interval: %v\n", config.ChannelPool.HealthCheckInterval)
+	logx.Info("Channel Pool Config",
+		logx.Int("min_channels_per_connection", config.ChannelPool.PerConnectionMin),
+		logx.Int("max_channels_per_connection", config.ChannelPool.PerConnectionMax),
+		logx.String("borrow_timeout", config.ChannelPool.BorrowTimeout.String()),
+		logx.String("health_check_interval", config.ChannelPool.HealthCheckInterval.String()))
 
 	// Demo message publishing
-	fmt.Println("\n📤 Message Publishing Demo:")
-	fmt.Println("============================")
+	logx.Info("Message Publishing Demo", logx.String("section", "publishing"))
 
 	// Create test messages
 	messages := []messaging.Message{
@@ -193,11 +199,17 @@ func main() {
 
 	// Publish messages
 	for i, msg := range messages {
-		fmt.Printf("📤 Publishing message %d: %s\n", i+1, msg.ID)
+		logx.Info("Publishing message",
+			logx.Int("message_number", i+1),
+			logx.String("message_id", msg.ID),
+			logx.String("exchange", "demo.exchange"))
 
 		receipt, err := publisher.PublishAsync(ctx, "demo.exchange", msg)
 		if err != nil {
-			fmt.Printf("❌ Failed to publish message %d: %v\n", i+1, err)
+			logx.Error("Failed to publish message",
+				logx.Int("message_number", i+1),
+				logx.String("message_id", msg.ID),
+				logx.ErrorField(err))
 			continue
 		}
 
@@ -206,40 +218,51 @@ func main() {
 		case <-receipt.Done():
 			_, err := receipt.Result()
 			if err != nil {
-				fmt.Printf("❌ Message %d failed: %v\n", i+1, err)
+				logx.Error("Message failed",
+					logx.Int("message_number", i+1),
+					logx.String("message_id", msg.ID),
+					logx.ErrorField(err))
 			} else {
-				fmt.Printf("✅ Message %d published successfully\n", i+1)
+				logx.Info("Message published successfully",
+					logx.Int("message_number", i+1),
+					logx.String("message_id", msg.ID))
 			}
 		case <-time.After(5 * time.Second):
-			fmt.Printf("⏰ Message %d timed out\n", i+1)
+			logx.Warn("Message timed out",
+				logx.Int("message_number", i+1),
+				logx.String("message_id", msg.ID),
+				logx.String("timeout", "5s"))
 		}
 	}
 
 	// Demo connection pool statistics
-	fmt.Println("\n📊 Connection Pool Statistics:")
-	fmt.Println("==============================")
+	logx.Info("Connection Pool Statistics", logx.String("section", "statistics"))
 
 	// Wait a bit for operations to complete
 	time.Sleep(2 * time.Second)
 
-	fmt.Println("🎯 Connection pool features demonstrated:")
-	fmt.Println("   ✅ Health monitoring with periodic checks")
-	fmt.Println("   ✅ Auto-recovery with exponential backoff + jitter")
-	fmt.Println("   ✅ Connection lifecycle management")
-	fmt.Println("   ✅ Thread-safe connection management")
-	fmt.Println("   ✅ Connection metrics and logging")
-	fmt.Println("   ✅ Graceful degradation and error handling")
-	fmt.Println("   ✅ Context-based cancellation")
-	fmt.Println("   ✅ Async message publishing with receipts")
+	logx.Info("Connection pool features demonstrated",
+		logx.Any("features", []string{
+			"Health monitoring with periodic checks",
+			"Auto-recovery with exponential backoff + jitter",
+			"Connection lifecycle management",
+			"Thread-safe connection management",
+			"Connection metrics and logging",
+			"Graceful degradation and error handling",
+			"Context-based cancellation",
+			"Async message publishing with receipts",
+		}))
 
-	fmt.Println("\n🚀 Demo completed successfully!")
-	fmt.Println("   The connection pool is now ready for production use with:")
-	fmt.Println("   - Robust error handling and recovery")
-	fmt.Println("   - Comprehensive monitoring and metrics")
-	fmt.Println("   - Thread-safe operations")
-	fmt.Println("   - Configurable timeouts and limits")
+	logx.Info("Demo completed successfully",
+		logx.String("status", "completed"),
+		logx.Any("production_ready_features", []string{
+			"Robust error handling and recovery",
+			"Comprehensive monitoring and metrics",
+			"Thread-safe operations",
+			"Configurable timeouts and limits",
+		}))
 
 	// Wait for shutdown signal
 	<-ctx.Done()
-	fmt.Println("👋 Goodbye!")
+	logx.Info("Goodbye", logx.String("status", "shutdown"))
 }

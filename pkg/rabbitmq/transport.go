@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/rabbitmq/amqp091-go"
+
 	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 

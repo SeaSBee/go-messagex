@@ -34,8 +34,8 @@ package main
 
 import (
     "context"
-    "log"
     
+    "github.com/seasbee/go-logx"
     "github.com/seasbee/go-messagex/pkg/messaging"
     "github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
@@ -56,7 +56,7 @@ func main() {
     // Create publisher
     publisher, err := rabbitmq.NewPublisher(context.Background(), config)
     if err != nil {
-        log.Fatal(err)
+        logx.Fatal("Failed to create publisher", logx.Error(err))
     }
     defer publisher.Close(context.Background())
     
@@ -64,16 +64,16 @@ func main() {
     msg := messaging.NewMessage([]byte("Hello, World!"))
     receipt, err := publisher.PublishAsync(context.Background(), "my.exchange", msg)
     if err != nil {
-        log.Fatal(err)
+        logx.Fatal("Failed to publish message", logx.Error(err))
     }
     
     // Wait for confirmation
     <-receipt.Done()
     result, err := receipt.Result()
     if err != nil {
-        log.Printf("Publish failed: %v", err)
+        logx.Error("Publish failed", logx.Error(err))
     } else {
-        log.Printf("Message published successfully")
+        logx.Info("Message published successfully")
     }
 }
 ```
@@ -85,8 +85,8 @@ package main
 
 import (
     "context"
-    "log"
     
+    "github.com/seasbee/go-logx"
     "github.com/seasbee/go-messagex/pkg/messaging"
     "github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
@@ -107,20 +107,20 @@ func main() {
     // Create consumer
     consumer, err := rabbitmq.NewConsumer(context.Background(), config)
     if err != nil {
-        log.Fatal(err)
+        logx.Fatal("Failed to create consumer", logx.Error(err))
     }
     defer consumer.Stop(context.Background())
     
     // Define message handler
     handler := messaging.HandlerFunc(func(ctx context.Context, delivery messaging.Delivery) (messaging.AckDecision, error) {
-        log.Printf("Received message: %s", string(delivery.Message.Body))
+        logx.Info("Received message", logx.String("body", string(delivery.Message.Body)))
         return messaging.Ack, nil
     })
     
     // Start consuming
     err = consumer.Start(context.Background(), handler)
     if err != nil {
-        log.Fatal(err)
+        logx.Fatal("Failed to start consumer", logx.Error(err))
     }
     
     // Keep running
@@ -310,7 +310,7 @@ defer consumer.Stop(ctx)
 handler := messaging.HandlerFunc(func(ctx context.Context, delivery messaging.Delivery) (messaging.AckDecision, error) {
     // Process message
     msg := delivery.Message
-    log.Printf("Processing message: %s", string(msg.Body))
+    logx.Info("Processing message", logx.String("body", string(msg.Body)))
     
     // Acknowledge message
     return messaging.Ack, nil
@@ -439,9 +439,11 @@ wrappedErr := messaging.WrapError(messaging.ErrorCodeInternal, "operation", "wra
 // Check error types
 var msgErr *messaging.MessagingError
 if errors.As(err, &msgErr) {
-    log.Printf("Error code: %s", msgErr.Code)
-    log.Printf("Operation: %s", msgErr.Operation)
-    log.Printf("Message: %s", msgErr.Message)
+    logx.Error("Messaging error occurred",
+        logx.String("error_code", string(msgErr.Code)),
+        logx.String("operation", msgErr.Operation),
+        logx.String("message", msgErr.Message),
+    )
 }
 ```
 
@@ -493,8 +495,10 @@ if err != nil {
     return err
 }
 
-log.Printf("Success rate: %.2f%%", result.SuccessRate())
-log.Printf("Throughput: %.2f msg/sec", result.Throughput)
+logx.Info("Test results",
+    logx.Float64("success_rate", result.SuccessRate()),
+    logx.Float64("throughput", result.Throughput),
+)
 ```
 
 ## Examples
@@ -559,8 +563,10 @@ monitor.RecordConsume(duration, success)
 
 // Get metrics
 metrics := monitor.GetMetrics()
-log.Printf("Throughput: %.2f msg/sec", metrics.TotalThroughput)
-log.Printf("Latency P95: %d ns", metrics.PublishLatencyP95)
+logx.Info("Performance metrics",
+    logx.Float64("throughput", metrics.TotalThroughput),
+    logx.Int64("latency_p95_ns", metrics.PublishLatencyP95),
+)
 ```
 
 ## Troubleshooting
@@ -655,7 +661,7 @@ healthManager.AddCheck("rabbitmq", func() messaging.HealthStatus {
 // Get health report
 report := healthManager.GetHealthReport()
 if report.Status != messaging.HealthStatusHealthy {
-    log.Printf("Health check failed: %v", report)
+    logx.Error("Health check failed", logx.Any("report", report))
 }
 ```
 

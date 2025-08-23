@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
-	"github.com/seasbee/go-messagex/pkg/rabbitmq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
 
 func TestPublisherConfirms(t *testing.T) {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -37,16 +36,25 @@ func (dh *DemoHandler) Process(ctx context.Context, delivery messaging.Delivery)
 
 	// Simulate failures based on failure rate
 	if dh.failureRate > 0 && float64(count%100) < dh.failureRate*100 {
+		logx.Error("simulated failure for message",
+			logx.String("message_id", delivery.Message.ID),
+			logx.Int64("count", count),
+			logx.String("processing_time", processingTime.String()))
 		return messaging.NackRequeue, fmt.Errorf("simulated failure for message %s", delivery.Message.ID)
 	}
 
 	// Simulate panic occasionally
 	if count%1000 == 0 && dh.failureRate > 0.1 {
+		logx.Error("simulated panic for message",
+			logx.String("message_id", delivery.Message.ID),
+			logx.Int64("count", count))
 		panic(fmt.Sprintf("simulated panic for message %s", delivery.Message.ID))
 	}
 
-	fmt.Printf("✅ Processed message %s (count: %d, time: %v)\n",
-		delivery.Message.ID, count, processingTime)
+	logx.Info("processed message",
+		logx.String("message_id", delivery.Message.ID),
+		logx.Int64("count", count),
+		logx.String("processing_time", processingTime.String()))
 
 	return messaging.Ack, nil
 }
@@ -56,15 +64,14 @@ func (dh *DemoHandler) GetProcessedCount() int64 {
 }
 
 func main() {
-	fmt.Println("🚀 Concurrent Consumer Demo")
-	fmt.Println("============================")
+	logx.Info("🚀 starting concurrent consumer demo")
 
 	// Register RabbitMQ transport
 	rabbitmq.Register()
 
 	// Initialize go-logx
 	if err := logx.InitDefault(); err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
+		logx.Fatal("failed to initialize logger", logx.String("error", err.Error()))
 	}
 	defer logx.Sync()
 
@@ -147,7 +154,7 @@ func main() {
 	// Create observability provider
 	obsProvider, err := messaging.NewObservabilityProvider(config.Telemetry)
 	if err != nil {
-		log.Fatalf("Failed to create observability provider: %v", err)
+		logx.Fatal("failed to create observability provider", logx.String("error", err.Error()))
 	}
 
 	obsCtx := messaging.NewObservabilityContext(context.Background(), obsProvider)
@@ -155,7 +162,7 @@ func main() {
 	// Create consumer using the messaging package
 	consumer, err := messaging.NewConsumer(context.Background(), config)
 	if err != nil {
-		log.Fatalf("Failed to create consumer: %v", err)
+		logx.Fatal("failed to create consumer", logx.String("error", err.Error()))
 	}
 
 	// Set up graceful shutdown
@@ -167,7 +174,7 @@ func main() {
 
 	go func() {
 		<-sigChan
-		fmt.Println("\n🛑 Shutting down...")
+		logx.Info("🛑 shutting down...")
 		cancel()
 	}()
 
@@ -181,15 +188,14 @@ func main() {
 
 	// Stop consumer
 	if err := consumer.Stop(context.Background()); err != nil {
-		log.Printf("Error stopping consumer: %v", err)
+		logx.Error("error stopping consumer", logx.String("error", err.Error()))
 	}
 
-	fmt.Println("✅ Demo completed!")
+	logx.Info("✅ demo completed")
 }
 
 func demonstrateConcurrentConsumption(ctx context.Context, consumer messaging.Consumer, obsCtx *messaging.ObservabilityContext) {
-	fmt.Println("\n📥 Example 1: Concurrent Message Consumption")
-	fmt.Println("--------------------------------------------")
+	logx.Info("📥 starting example 1: concurrent message consumption")
 
 	// Create a handler with no failures for this demo
 	handler := NewDemoHandler(0.0)
@@ -201,7 +207,7 @@ func demonstrateConcurrentConsumption(ctx context.Context, consumer messaging.Co
 	go func() {
 		err := consumer.Start(consumerCtx, handler)
 		if err != nil {
-			fmt.Printf("❌ Consumer error: %v\n", err)
+			logx.Error("consumer error", logx.String("error", err.Error()))
 		}
 	}()
 
@@ -211,15 +217,14 @@ func demonstrateConcurrentConsumption(ctx context.Context, consumer messaging.Co
 	// Check statistics if available
 	if statsConsumer, ok := consumer.(interface{ GetStats() interface{} }); ok {
 		stats := statsConsumer.GetStats()
-		fmt.Printf("📊 Consumer Stats: %+v\n", stats)
+		logx.Info("consumer stats", logx.Any("stats", stats))
 	}
 
-	fmt.Printf("📊 Messages processed: %d\n", handler.GetProcessedCount())
+	logx.Info("messages processed", logx.Int64("count", handler.GetProcessedCount()))
 }
 
 func demonstrateFailureHandling(ctx context.Context, consumer messaging.Consumer, obsCtx *messaging.ObservabilityContext) {
-	fmt.Println("\n⚠️ Example 2: Failure Handling and Retries")
-	fmt.Println("------------------------------------------")
+	logx.Info("⚠️ starting example 2: failure handling and retries")
 
 	// Create a handler with 20% failure rate
 	handler := NewDemoHandler(0.2)
@@ -231,7 +236,7 @@ func demonstrateFailureHandling(ctx context.Context, consumer messaging.Consumer
 	go func() {
 		err := consumer.Start(consumerCtx, handler)
 		if err != nil {
-			fmt.Printf("❌ Consumer error: %v\n", err)
+			logx.Error("consumer error", logx.String("error", err.Error()))
 		}
 	}()
 
@@ -241,15 +246,14 @@ func demonstrateFailureHandling(ctx context.Context, consumer messaging.Consumer
 	// Check statistics
 	if statsConsumer, ok := consumer.(interface{ GetStats() interface{} }); ok {
 		stats := statsConsumer.GetStats()
-		fmt.Printf("📊 Consumer Stats with failures: %+v\n", stats)
+		logx.Info("consumer stats with failures", logx.Any("stats", stats))
 	}
 
-	fmt.Printf("📊 Messages processed: %d\n", handler.GetProcessedCount())
+	logx.Info("messages processed", logx.Int64("count", handler.GetProcessedCount()))
 }
 
 func demonstratePanicRecovery(ctx context.Context, consumer messaging.Consumer, obsCtx *messaging.ObservabilityContext) {
-	fmt.Println("\n💥 Example 3: Panic Recovery")
-	fmt.Println("----------------------------")
+	logx.Info("💥 starting example 3: panic recovery")
 
 	// Create a handler with higher failure rate to trigger panics
 	handler := NewDemoHandler(0.3)
@@ -261,7 +265,7 @@ func demonstratePanicRecovery(ctx context.Context, consumer messaging.Consumer, 
 	go func() {
 		err := consumer.Start(consumerCtx, handler)
 		if err != nil {
-			fmt.Printf("❌ Consumer error: %v\n", err)
+			logx.Error("consumer error", logx.String("error", err.Error()))
 		}
 	}()
 
@@ -271,14 +275,14 @@ func demonstratePanicRecovery(ctx context.Context, consumer messaging.Consumer, 
 	// Check final statistics
 	if statsConsumer, ok := consumer.(interface{ GetStats() interface{} }); ok {
 		stats := statsConsumer.GetStats()
-		fmt.Printf("📊 Final Consumer Stats: %+v\n", stats)
+		logx.Info("final consumer stats", logx.Any("stats", stats))
 	}
 
-	fmt.Printf("📊 Total messages processed: %d\n", handler.GetProcessedCount())
-	fmt.Println("\n📋 Summary:")
-	fmt.Println("- Concurrent message processing with worker pools")
-	fmt.Println("- Automatic retry handling with exponential backoff")
-	fmt.Println("- Panic recovery with DLQ routing")
-	fmt.Println("- QoS control with prefetch limits")
-	fmt.Println("- Comprehensive statistics and monitoring")
+	logx.Info("total messages processed", logx.Int64("count", handler.GetProcessedCount()))
+	logx.Info("📋 demo summary",
+		logx.String("feature1", "concurrent message processing with worker pools"),
+		logx.String("feature2", "automatic retry handling with exponential backoff"),
+		logx.String("feature3", "panic recovery with DLQ routing"),
+		logx.String("feature4", "QoS control with prefetch limits"),
+		logx.String("feature5", "comprehensive statistics and monitoring"))
 }

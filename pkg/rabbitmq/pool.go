@@ -9,6 +9,7 @@ import (
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/seasbee/go-logx"
+
 	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
@@ -64,7 +65,7 @@ type ConnectionLifecycleEvent struct {
 	Connection *amqp091.Connection
 	Event      string
 	State      ConnectionState
-	Error      error
+	Error      *amqp091.Error
 	Timestamp  time.Time
 }
 
@@ -215,7 +216,7 @@ func (cp *ConnectionPool) monitorConnectionClose(conn *amqp091.Connection, info 
 }
 
 // handleConnectionClose handles connection close events
-func (cp *ConnectionPool) handleConnectionClose(conn *amqp091.Connection, info *ConnectionInfo, err error) {
+func (cp *ConnectionPool) handleConnectionClose(conn *amqp091.Connection, info *ConnectionInfo, err *amqp091.Error) {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 

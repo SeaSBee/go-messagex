@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/seasbee/go-logx"
-	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
 func TestObservabilityProvider(t *testing.T) {
@@ -76,6 +77,8 @@ func TestHealthManager(t *testing.T) {
 
 	// Test function registration
 	manager.RegisterFunc("test_func", func(ctx context.Context) messaging.HealthCheck {
+		// Add a small delay to ensure measurable duration
+		time.Sleep(1 * time.Millisecond)
 		return messaging.HealthCheck{
 			Name:   "test_func",
 			Status: messaging.HealthStatusHealthy,
