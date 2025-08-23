@@ -1,0 +1,127 @@
+# go-messagex CLI Configuration Example
+# This file demonstrates configuration file support for the CLI applications
+
+transport: "rabbitmq"
+
+rabbitmq:
+  # Connection URIs (can be overridden by environment variables)
+  uris:
+    - "amqp://localhost:5672/"
+    - "amqp://localhost:5673/"  # Fallback URI
+  
+  # Connection pool settings
+  connectionPool:
+    min: 2
+    max: 8
+    healthCheckInterval: 30s
+    connectionTimeout: 10s
+    heartbeatInterval: 10s
+  
+  # Channel pool settings
+  channelPool:
+    perConnectionMin: 10
+    perConnectionMax: 100
+    borrowTimeout: 5s
+    healthCheckInterval: 30s
+  
+  # Publisher configuration
+  publisher:
+    confirms: true
+    mandatory: true
+    maxInFlight: 1000
+    dropOnOverflow: false
+    publishTimeout: 30s
+    workerCount: 4
+    retry:
+      maxAttempts: 3
+      baseBackoff: 100ms
+      maxBackoff: 1s
+      backoffMultiplier: 2.0
+      jitter: true
+    serialization:
+      defaultContentType: "application/json"
+      compressionEnabled: false
+      compressionLevel: 6
+  
+  # Consumer configuration
+  consumer:
+    queue: "demo.queue"
+    prefetch: 256
+    maxConcurrentHandlers: 512
+    handlerTimeout: 30s
+    requeueOnError: true
+    ackOnSuccess: true
+    autoAck: false
+    exclusive: false
+    noLocal: false
+    noWait: false
+    panicRecovery: true
+    maxRetries: 3
+  
+  # Dead Letter Queue configuration
+  dlq:
+    enabled: true
+    exchange: "dlx.demo"
+    queue: "dlq.demo"
+    routingKey: "dlq"
+    maxRetries: 3
+    retryDelay: 5s
+    autoCreate: true
+  
+  # Topology configuration
+  topology:
+    exchanges:
+      - name: "demo.exchange"
+        type: "direct"
+        durable: true
+        autoDelete: false
+        internal: false
+        arguments: {}
+      
+      - name: "dlx.demo"
+        type: "direct"
+        durable: true
+        autoDelete: false
+        internal: false
+        arguments: {}
+    
+    queues:
+      - name: "demo.queue"
+        durable: true
+        autoDelete: false
+        exclusive: false
+        arguments:
+          x-dead-letter-exchange: "dlx.demo"
+          x-dead-letter-routing-key: "dlq"
+          x-max-priority: 10
+      
+      - name: "dlq.demo"
+        durable: true
+        autoDelete: false
+        exclusive: false
+        arguments: {}
+    
+    bindings:
+      - exchange: "demo.exchange"
+        queue: "demo.queue"
+        key: "demo.key"
+        arguments: {}
+      
+      - exchange: "dlx.demo"
+        queue: "dlq.demo"
+        key: "dlq"
+        arguments: {}
+
+# Telemetry configuration
+telemetry:
+  metricsEnabled: true
+  tracingEnabled: true
+  serviceName: "go-messagex-cli"
+  metrics:
+    port: 9090
+    path: "/metrics"
+  tracing:
+    endpoint: "http://localhost:14268/api/traces"
+    sampler:
+      type: "probabilistic"
+      param: 0.1

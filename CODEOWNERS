@@ -1,0 +1,36 @@
+# Code owners for go-messagex
+# This file defines who is responsible for different parts of the codebase
+
+# Global owners - these people will be requested for review on all pull requests
+* @seasbee/core-team
+
+# Core messaging interfaces and types
+/pkg/messaging/ @seasbee/messaging-team
+
+# RabbitMQ implementation
+/pkg/rabbitmq/ @seasbee/messaging-team
+
+# Configuration management
+/internal/configloader/ @seasbee/messaging-team
+
+# CLI examples
+/cmd/ @seasbee/messaging-team
+
+# Documentation
+/docs/ @seasbee/messaging-team
+README.md @seasbee/messaging-team
+CONTRIBUTING.md @seasbee/messaging-team
+
+# CI/CD and build configuration
+Makefile @seasbee/devops-team
+.golangci.yml @seasbee/devops-team
+
+# Configuration examples
+/configs/ @seasbee/messaging-team
+
+# Tests
+/tests/ @seasbee/messaging-team
+
+# Go module configuration
+go.mod @seasbee/messaging-team
+go.sum @seasbee/messaging-team

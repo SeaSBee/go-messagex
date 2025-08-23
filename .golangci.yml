@@ -1,0 +1,273 @@
+run:
+  timeout: 5m
+  go: "1.24.5"
+  modules-download-mode: readonly
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  dupl:
+    threshold: 100
+  goconst:
+    min-len: 2
+    min-occurrences: 3
+  misspell:
+    locale: US
+  lll:
+    line-length: 140
+  goimports:
+    local-prefixes: github.com/seasbee/go-messagex
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - dupImport # https://github.com/go-critic/go-critic/issues/845
+      - ifElseChain
+      - octalLiteral
+      - whyNoLint
+      - wrapperFunc
+      - hugeParam
+      - unlabelStmt
+      - unnamedResult
+      - valSwap
+      - weakCond
+      - yodaStyleExpr
+  funlen:
+    lines: 100
+    statements: 50
+  gocognit:
+    min-complexity: 15
+  noctx:
+    checks:
+      - func
+      - method
+  prealloc:
+    simple: true
+    range-loops: true
+    for-loops: false
+  gosec:
+    excludes:
+      - G404 # Use of weak random number generator (math/rand instead of crypto/rand)
+      - G110 # Potential DoS vulnerability via decompression bomb
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+    exclude-functions: fmt:.*
+  staticcheck:
+    checks:
+      - all
+    initialisms:
+      - ACL
+      - API
+      - ASCII
+      - CPU
+      - CSS
+      - DNS
+      - EOF
+      - GUID
+      - HTML
+      - HTTP
+      - HTTPS
+      - ID
+      - IP
+      - JSON
+      - QPS
+      - RAM
+      - RPC
+      - SLA
+      - SMTP
+      - SQL
+      - SSH
+      - TCP
+      - TLS
+      - TTL
+      - UDP
+      - UI
+      - GID
+      - UID
+      - UUID
+      - URI
+      - URL
+      - UTF8
+      - VM
+      - XML
+      - XMPP
+      - XSRF
+      - XSS
+  unused:
+    check-exported: false
+  stylecheck:
+    checks:
+      - all
+    initialisms:
+      - ACL
+      - API
+      - ASCII
+      - CPU
+      - CSS
+      - DNS
+      - EOF
+      - GUID
+      - HTML
+      - HTTP
+      - HTTPS
+      - ID
+      - IP
+      - JSON
+      - QPS
+      - RAM
+      - RPC
+      - SLA
+      - SMTP
+      - SQL
+      - SSH
+      - TCP
+      - TLS
+      - TTL
+      - UDP
+      - UI
+      - GID
+      - UID
+      - UUID
+      - URI
+      - URL
+      - UTF8
+      - VM
+      - XML
+      - XMPP
+      - XSRF
+      - XSS
+
+linters:
+  disable-all: true
+  enable:
+    - bodyclose
+    - copyloopvar
+    - depguard
+    - dogsled
+    - dupl
+    - errcheck
+    - exhaustive
+    - forbidigo
+    - funlen
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - gocyclo
+    - gofmt
+    - gofumpt
+    - goheader
+    - goimports
+    - mnd
+    - gomodguard
+    - goprintffuncname
+    - gosec
+    - gosimple
+    - govet
+    - ineffassign
+    - lll
+    - makezero
+    - misspell
+    - nakedret
+    - noctx
+    - nolintlint
+    - prealloc
+    - predeclared
+    - promlinter
+    - revive
+    - rowserrcheck
+    - predeclared
+    - staticcheck
+    - stylecheck
+    - thelper
+    - tparallel
+    - typecheck
+    - unconvert
+    - unparam
+    - unused
+    - whitespace
+    - wrapcheck
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - mnd
+        - goconst
+        - gocyclo
+        - funlen
+        - gocognit
+        - dupl
+        - gosec
+        - gosimple
+        - staticcheck
+        - stylecheck
+        - thelper
+        - tparallel
+        - wrapcheck
+        - depguard
+    - path: pkg/kafka/
+      linters:
+        - unused
+    - path: cmd/
+      linters:
+        - gosec
+        - mnd
+        - goconst
+        - gocyclo
+        - funlen
+        - gocognit
+        - dupl
+        - gosimple
+        - staticcheck
+        - stylecheck
+        - wrapcheck
+    - path: internal/
+      linters:
+        - gosec
+        - mnd
+        - goconst
+        - gocyclo
+        - funlen
+        - gocognit
+        - dupl
+        - gosimple
+        - staticcheck
+        - stylecheck
+        - wrapcheck
+    - path: tests/
+      linters:
+        - gosec
+        - mnd
+        - goconst
+        - gocyclo
+        - funlen
+        - gocognit
+        - dupl
+        - gosimple
+        - staticcheck
+        - stylecheck
+        - wrapcheck
+    - path: docs/
+      linters:
+        - all
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude:
+    - "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*printf|.*print|.*println) is not checked"
+    - "unused variable"
+    - "unused function"
+    - "unused constant"
+    - "unused type"
+    - "unused package"
+    - "unused import"
+    - "unused struct field"
+    - "unused method"
+    - "unused interface"
+
+severity:
+  default-severity: error

@@ -1,0 +1,202 @@
+# go-messagex Configuration Example
+# This file demonstrates all available configuration options for the messaging system.
+
+# Transport configuration
+transport: rabbitmq  # Options: rabbitmq, kafka (future)
+
+# RabbitMQ-specific configuration
+rabbitmq:
+  # Connection URIs - supports multiple for high availability
+  uris:
+    - "amqps://user:pass@rmq-1:5671/vhost"
+    - "amqps://user:pass@rmq-2:5671/vhost"
+    - "amqps://user:pass@rmq-3:5671/vhost"
+
+  # Connection pool configuration
+  connectionPool:
+    min: 2                    # Minimum connections to maintain
+    max: 8                    # Maximum connections allowed
+    healthCheckInterval: 30s  # Health check interval
+    connectionTimeout: 10s    # Connection establishment timeout
+    heartbeatInterval: 10s    # Heartbeat interval
+
+  # Channel pool configuration
+  channelPool:
+    perConnectionMin: 10      # Minimum channels per connection
+    perConnectionMax: 100     # Maximum channels per connection
+    borrowTimeout: 5s         # Channel borrow timeout
+    healthCheckInterval: 30s  # Channel health check interval
+
+  # Topology configuration - exchanges, queues, and bindings
+  topology:
+    # Dead letter exchange configuration
+    deadLetterExchange: "app.dlx"
+    autoCreateDeadLetter: true
+
+    # Exchanges to declare
+    exchanges:
+      - name: "app.topic"
+        type: "topic"
+        durable: true
+        autoDelete: false
+        internal: false
+        noWait: false
+        args: {}
+
+      - name: "app.direct"
+        type: "direct"
+        durable: true
+        autoDelete: false
+        internal: false
+        noWait: false
+        args: {}
+
+      - name: "app.fanout"
+        type: "fanout"
+        durable: true
+        autoDelete: false
+        internal: false
+        noWait: false
+        args: {}
+
+      - name: "app.dlx"
+        type: "direct"
+        durable: true
+        autoDelete: false
+        internal: false
+        noWait: false
+        args: {}
+
+    # Queues to declare
+    queues:
+      - name: "app.events"
+        durable: true
+        autoDelete: false
+        exclusive: false
+        noWait: false
+        priority: true
+        maxPriority: 10
+        deadLetterExchange: "app.dlx"
+        deadLetterRoutingKey: "events.dlq"
+        args:
+          x-message-ttl: 86400000  # 24 hours in milliseconds
+          x-max-length: 10000
+          x-overflow: "drop-head"
+
+      - name: "app.commands"
+        durable: true
+        autoDelete: false
+        exclusive: false
+        noWait: false
+        priority: false
+        args:
+          x-message-ttl: 300000  # 5 minutes in milliseconds
+          x-max-length: 1000
+
+      - name: "app.notifications"
+        durable: true
+        autoDelete: false
+        exclusive: false
+        noWait: false
+        priority: false
+        args:
+          x-message-ttl: 60000  # 1 minute in milliseconds
+
+      - name: "app.events.dlq"
+        durable: true
+        autoDelete: false
+        exclusive: false
+        noWait: false
+        priority: false
+        args:
+          x-message-ttl: 604800000  # 7 days in milliseconds
+
+    # Bindings between exchanges and queues
+    bindings:
+      - exchange: "app.topic"
+        queue: "app.events"
+        key: "events.*"
+        noWait: false
+        args: {}
+
+      - exchange: "app.direct"
+        queue: "app.commands"
+        key: "commands"
+        noWait: false
+        args: {}
+
+      - exchange: "app.fanout"
+        queue: "app.notifications"
+        key: ""
+        noWait: false
+        args: {}
+
+      - exchange: "app.dlx"
+        queue: "app.events.dlq"
+        key: "events.dlq"
+        noWait: false
+        args: {}
+
+  # Publisher configuration
+  publisher:
+    confirms: true           # Enable publisher confirms
+    mandatory: true          # Messages must be routable
+    immediate: false         # Messages must be deliverable immediately
+    maxInFlight: 10000       # Maximum unconfirmed messages
+    dropOnOverflow: false    # Drop messages when queue is full
+    publishTimeout: 2s       # Publish operation timeout
+    workerCount: 4           # Number of publisher workers
+
+    # Retry configuration
+    retry:
+      maxAttempts: 5         # Maximum retry attempts
+      baseBackoff: 100ms     # Base backoff duration
+      maxBackoff: 5s         # Maximum backoff duration
+      backoffMultiplier: 2.0 # Backoff multiplier
+      jitter: true           # Enable jitter in backoff
+
+    # Serialization configuration
+    serialization:
+      defaultContentType: "application/json"
+      compressionEnabled: false
+      compressionLevel: 6
+
+  # Consumer configuration
+  consumer:
+    queue: "app.events"      # Queue to consume from
+    prefetch: 256            # Number of messages to prefetch
+    maxConcurrentHandlers: 512 # Maximum concurrent handlers
+    requeueOnError: true     # Requeue messages on error
+    ackOnSuccess: true       # Acknowledge messages on success
+    autoAck: false           # Automatic acknowledgment
+    exclusive: false         # Exclusive consumer
+    noLocal: false           # Exclude messages from same connection
+    noWait: false            # Don't wait for consumer confirmation
+    handlerTimeout: 30s      # Message handler timeout
+    panicRecovery: true      # Enable panic recovery
+    args: {}
+
+  # TLS configuration
+  tls:
+    enabled: true
+    caFile: "/etc/ssl/ca.pem"
+    certFile: "/etc/ssl/client.crt"
+    keyFile: "/etc/ssl/client.key"
+    minVersion: "1.2"
+    insecureSkipVerify: false
+    serverName: "rabbitmq.example.com"
+
+  # Security configuration
+  security:
+    hmacEnabled: false       # Enable HMAC message signing
+    hmacSecret: ""           # HMAC secret key (set via ENV)
+    hmacAlgorithm: "sha256"  # HMAC algorithm
+    verifyHostname: true     # Enable hostname verification
+
+# Telemetry configuration
+telemetry:
+  metricsEnabled: true       # Enable metrics collection
+  tracingEnabled: true       # Enable distributed tracing
+  otlpEndpoint: "http://localhost:4317" # OpenTelemetry endpoint
+  serviceName: "go-messagex" # Service name for telemetry
+  serviceVersion: "0.1.0"    # Service version for telemetry
