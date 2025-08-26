@@ -106,18 +106,27 @@ func main() {
 	advancedPublisher.SetPersistence(persistence)
 
 	// Create message transformation
-	transformation := messaging.NewMessageTransformation(config.RabbitMQ.Transformation, obsCtx)
+	transformation, err := messaging.NewMessageTransformation(config.RabbitMQ.Transformation, obsCtx)
+	if err != nil {
+		logx.Fatal("Failed to create message transformation", logx.ErrorField(err))
+	}
 	advancedPublisher.SetTransformation(transformation)
 
 	// Create advanced routing
-	routing := messaging.NewAdvancedRouting(config.RabbitMQ.Routing, obsCtx)
+	routing, err := messaging.NewAdvancedRouting(config.RabbitMQ.Routing, obsCtx)
+	if err != nil {
+		logx.Fatal("Failed to create advanced routing", logx.ErrorField(err))
+	}
 	advancedPublisher.SetRouting(routing)
 
 	// Create advanced consumer
 	advancedConsumer := rabbitmq.NewAdvancedConsumer(transport, config.RabbitMQ.Consumer, obsCtx)
 
 	// Create dead letter queue (using a wrapper to match the interface)
-	dlq := messaging.NewDeadLetterQueue(config.RabbitMQ.DLQ, &transportWrapper{transport: transport}, obsCtx)
+	dlq, err := messaging.NewDeadLetterQueue(config.RabbitMQ.DLQ, &transportWrapper{transport: transport}, obsCtx)
+	if err != nil {
+		logx.Fatal("Failed to create dead letter queue", logx.ErrorField(err))
+	}
 	advancedConsumer.SetDLQ(dlq)
 
 	// Set transformation and routing for consumer
@@ -185,7 +194,7 @@ func main() {
 			messaging.WithCorrelationID(fmt.Sprintf("correlation-%s", msg.id)),
 		)
 
-		receipt, err := advancedPublisher.PublishAsync(ctx, "advanced.exchange", message)
+		receipt, err := advancedPublisher.PublishAsync(ctx, "advanced.exchange", *message)
 		if err != nil {
 			logx.Error("Failed to publish message",
 				logx.String("message_id", msg.id),

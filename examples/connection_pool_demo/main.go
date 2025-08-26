@@ -120,7 +120,11 @@ func main() {
 		MaxInFlight:    1000,
 		PublishTimeout: 2 * time.Second,
 	}
-	publisher := rabbitmq.NewPublisher(transport.Transport, publisherConfig, obsCtx)
+	publisher, err := rabbitmq.NewPublisher(transport.Transport, publisherConfig, obsCtx)
+	if err != nil {
+		logx.Error("Failed to create publisher", logx.ErrorField(err))
+		return
+	}
 	logx.Info("Created publisher", logx.String("status", "success"))
 
 	// Create consumer
@@ -131,7 +135,11 @@ func main() {
 		RequeueOnError:        true,
 		HandlerTimeout:        30 * time.Second,
 	}
-	consumer := rabbitmq.NewConsumer(transport.Transport, consumerConfig, obsCtx)
+	consumer, err := rabbitmq.NewConsumer(transport.Transport, consumerConfig, obsCtx)
+	if err != nil {
+		logx.Error("Failed to create consumer", logx.ErrorField(err))
+		return
+	}
 	logx.Info("Created consumer", logx.String("status", "success"))
 
 	// Create message handler

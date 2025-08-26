@@ -93,6 +93,7 @@ func main() {
 	if err != nil {
 		logx.Fatal("Failed to create publisher", logx.String("error", err.Error()))
 	}
+	defer publisher.Close(context.Background())
 
 	// Set up graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -129,7 +130,7 @@ func demonstrateAsyncPublishing(ctx context.Context, publisher messaging.Publish
 		logx.String("exchange", "async.demo"))
 
 	// Create multiple messages
-	messages := []messaging.Message{
+	messages := []*messaging.Message{
 		messaging.NewMessage([]byte("message 1"), messaging.WithID("msg-1")),
 		messaging.NewMessage([]byte("message 2"), messaging.WithID("msg-2")),
 		messaging.NewMessage([]byte("message 3"), messaging.WithID("msg-3")),
@@ -159,7 +160,7 @@ func demonstrateAsyncPublishing(ctx context.Context, publisher messaging.Publish
 			logx.Info("📤 Queued message",
 				logx.Int("message_index", index+1),
 				logx.String("message_id", message.ID))
-		}(i, msg)
+		}(i, *msg)
 	}
 
 	wg.Wait()
@@ -243,7 +244,7 @@ func demonstrateCodecSystem(ctx context.Context, obsCtx *messaging.Observability
 		messaging.WithKey("test.key"),
 	)
 
-	encodedMsg, err := messageCodec.EncodeMessage(&msg)
+	encodedMsg, err := messageCodec.EncodeMessage(msg)
 	if err != nil {
 		logx.Error("Message encoding failed", logx.String("error", err.Error()))
 	} else {
@@ -270,7 +271,7 @@ func demonstrateBackpressureHandling(ctx context.Context, publisher messaging.Pu
 
 	// Create a large number of messages to test backpressure
 	const messageCount = 100
-	messages := make([]messaging.Message, messageCount)
+	messages := make([]*messaging.Message, messageCount)
 	for i := 0; i < messageCount; i++ {
 		messages[i] = messaging.NewMessage(
 			[]byte("backpressure test message"),
@@ -285,7 +286,7 @@ func demonstrateBackpressureHandling(ctx context.Context, publisher messaging.Pu
 	logx.Info("📤 Publishing messages rapidly", logx.Int("message_count", messageCount))
 
 	for i, msg := range messages {
-		receipt, err := publisher.PublishAsync(ctx, "async.demo", msg)
+		receipt, err := publisher.PublishAsync(ctx, "async.demo", *msg)
 		if err != nil {
 			logx.Error("Failed to publish message",
 				logx.Int("message_index", i+1),

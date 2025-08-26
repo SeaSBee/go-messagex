@@ -4,6 +4,8 @@ package messaging
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"math"
 	"sync"
 	"time"
 )
@@ -33,11 +35,20 @@ func NewJSONCodec() *JSONCodec {
 
 // Encode encodes data to JSON bytes
 func (jc *JSONCodec) Encode(data interface{}) ([]byte, error) {
+	if data == nil {
+		return nil, fmt.Errorf("cannot encode nil data")
+	}
 	return json.Marshal(data)
 }
 
 // Decode decodes JSON bytes to data
 func (jc *JSONCodec) Decode(data []byte, dest interface{}) error {
+	if len(data) == 0 {
+		return fmt.Errorf("cannot decode empty data")
+	}
+	if dest == nil {
+		return fmt.Errorf("destination cannot be nil")
+	}
 	return json.Unmarshal(data, dest)
 }
 
@@ -52,6 +63,8 @@ func (jc *JSONCodec) Name() string {
 }
 
 // ProtobufCodec provides Protocol Buffers serialization
+// Note: This requires the "google.golang.org/protobuf/proto" package to be imported
+// for actual protobuf functionality. Currently falls back to JSON.
 type ProtobufCodec struct{}
 
 // NewProtobufCodec creates a new Protocol Buffers codec
@@ -61,6 +74,10 @@ func NewProtobufCodec() *ProtobufCodec {
 
 // Encode encodes data to Protocol Buffers bytes
 func (pc *ProtobufCodec) Encode(data interface{}) ([]byte, error) {
+	if data == nil {
+		return nil, fmt.Errorf("cannot encode nil data")
+	}
+
 	// Check if the data implements the proto.Message interface
 	if protoMsg, ok := data.(interface {
 		Marshal() ([]byte, error)
@@ -74,6 +91,13 @@ func (pc *ProtobufCodec) Encode(data interface{}) ([]byte, error) {
 
 // Decode decodes Protocol Buffers bytes to data
 func (pc *ProtobufCodec) Decode(data []byte, dest interface{}) error {
+	if len(data) == 0 {
+		return fmt.Errorf("cannot decode empty data")
+	}
+	if dest == nil {
+		return fmt.Errorf("destination cannot be nil")
+	}
+
 	// Check if the destination implements the proto.Message interface
 	if protoMsg, ok := dest.(interface {
 		Unmarshal([]byte) error
@@ -102,6 +126,9 @@ type AvroCodec struct {
 
 // NewAvroCodec creates a new Avro codec
 func NewAvroCodec(schema string) *AvroCodec {
+	if schema == "" {
+		schema = "{}" // Default empty schema
+	}
 	return &AvroCodec{
 		schema: schema,
 	}
@@ -109,6 +136,9 @@ func NewAvroCodec(schema string) *AvroCodec {
 
 // Encode encodes data to Avro bytes
 func (ac *AvroCodec) Encode(data interface{}) ([]byte, error) {
+	if data == nil {
+		return nil, fmt.Errorf("cannot encode nil data")
+	}
 	// For now, fallback to JSON since we don't have a full Avro implementation
 	// In a real implementation, you would use a library like github.com/linkedin/goavro
 	return json.Marshal(data)
@@ -116,6 +146,12 @@ func (ac *AvroCodec) Encode(data interface{}) ([]byte, error) {
 
 // Decode decodes Avro bytes to data
 func (ac *AvroCodec) Decode(data []byte, dest interface{}) error {
+	if len(data) == 0 {
+		return fmt.Errorf("cannot decode empty data")
+	}
+	if dest == nil {
+		return fmt.Errorf("destination cannot be nil")
+	}
 	// For now, fallback to JSON since we don't have a full Avro implementation
 	// In a real implementation, you would use a library like github.com/linkedin/goavro
 	return json.Unmarshal(data, dest)
@@ -152,6 +188,9 @@ func NewCodecRegistry() *CodecRegistry {
 
 // Register registers a codec
 func (cr *CodecRegistry) Register(codec Codec) {
+	if codec == nil {
+		return // Silently ignore nil codecs
+	}
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 	cr.codecs[codec.Name()] = codec
@@ -159,6 +198,9 @@ func (cr *CodecRegistry) Register(codec Codec) {
 
 // Get retrieves a codec by name
 func (cr *CodecRegistry) Get(name string) (Codec, bool) {
+	if name == "" {
+		return nil, false
+	}
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
 	codec, exists := cr.codecs[name]
@@ -167,6 +209,9 @@ func (cr *CodecRegistry) Get(name string) (Codec, bool) {
 
 // GetByContentType retrieves a codec by content type
 func (cr *CodecRegistry) GetByContentType(contentType string) (Codec, bool) {
+	if contentType == "" {
+		return nil, false
+	}
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
 
@@ -194,11 +239,24 @@ func (cr *CodecRegistry) List() []string {
 type MessageCodec struct {
 	registry     *CodecRegistry
 	defaultCodec Codec
+	mu           sync.RWMutex
 }
 
 // NewMessageCodec creates a new message codec
 func NewMessageCodec(registry *CodecRegistry) *MessageCodec {
-	defaultCodec, _ := registry.Get("json")
+	if registry == nil {
+		registry = NewCodecRegistry()
+	}
+
+	defaultCodec, exists := registry.Get("json")
+	if !exists {
+		// If json codec doesn't exist, try to get any available codec
+		codecs := registry.List()
+		if len(codecs) > 0 {
+			defaultCodec, _ = registry.Get(codecs[0])
+		}
+	}
+
 	return &MessageCodec{
 		registry:     registry,
 		defaultCodec: defaultCodec,
@@ -207,11 +265,24 @@ func NewMessageCodec(registry *CodecRegistry) *MessageCodec {
 
 // SetDefaultCodec sets the default codec
 func (mc *MessageCodec) SetDefaultCodec(codec Codec) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
 	mc.defaultCodec = codec
+}
+
+// getDefaultCodec safely retrieves the default codec
+func (mc *MessageCodec) getDefaultCodec() Codec {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+	return mc.defaultCodec
 }
 
 // EncodeMessage encodes a message using the appropriate codec
 func (mc *MessageCodec) EncodeMessage(msg *Message) ([]byte, error) {
+	if msg == nil {
+		return nil, NewError(ErrorCodeSerialization, "encode_message", "message cannot be nil")
+	}
+
 	// Determine which codec to use
 	var codec Codec
 
@@ -222,7 +293,7 @@ func (mc *MessageCodec) EncodeMessage(msg *Message) ([]byte, error) {
 	}
 
 	if codec == nil {
-		codec = mc.defaultCodec
+		codec = mc.getDefaultCodec()
 	}
 
 	if codec == nil {
@@ -249,6 +320,10 @@ func (mc *MessageCodec) EncodeMessage(msg *Message) ([]byte, error) {
 
 // DecodeMessage decodes bytes to a message using the appropriate codec
 func (mc *MessageCodec) DecodeMessage(data []byte, contentType string) (*Message, error) {
+	if len(data) == 0 {
+		return nil, NewError(ErrorCodeSerialization, "decode_message", "data cannot be empty")
+	}
+
 	// Determine which codec to use
 	var codec Codec
 
@@ -259,7 +334,7 @@ func (mc *MessageCodec) DecodeMessage(data []byte, contentType string) (*Message
 	}
 
 	if codec == nil {
-		codec = mc.defaultCodec
+		codec = mc.getDefaultCodec()
 	}
 
 	if codec == nil {
@@ -293,10 +368,13 @@ func (mc *MessageCodec) DecodeMessage(data []byte, contentType string) (*Message
 		msg.Body = body
 	}
 	if headers, ok := decoded["headers"].(map[string]interface{}); ok {
-		msg.Headers = make(map[string]string)
+		msg.Headers = make(map[string]string, len(headers))
 		for k, v := range headers {
 			if str, ok := v.(string); ok {
 				msg.Headers[k] = str
+			} else {
+				// Convert non-string values to string
+				msg.Headers[k] = fmt.Sprintf("%v", v)
 			}
 		}
 	}
@@ -306,10 +384,19 @@ func (mc *MessageCodec) DecodeMessage(data []byte, contentType string) (*Message
 	if ts, ok := decoded["timestamp"].(string); ok {
 		if timestamp, err := time.Parse(time.RFC3339, ts); err == nil {
 			msg.Timestamp = timestamp
+		} else {
+			// Try alternative time formats
+			if timestamp, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+				msg.Timestamp = timestamp
+			}
 		}
 	}
 	if priority, ok := decoded["priority"].(float64); ok {
-		msg.Priority = uint8(priority)
+		// Handle potential overflow
+		if priority >= 0 && priority <= math.MaxUint8 {
+			msg.Priority = uint8(priority)
+		}
+		// If priority is out of range, leave it as zero (default)
 	}
 	if idempotencyKey, ok := decoded["idempotencyKey"].(string); ok {
 		msg.IdempotencyKey = idempotencyKey
@@ -324,6 +411,7 @@ func (mc *MessageCodec) DecodeMessage(data []byte, contentType string) (*Message
 		if duration, err := time.ParseDuration(expiration); err == nil {
 			msg.Expiration = duration
 		}
+		// Note: If duration parsing fails, expiration remains zero (no expiration)
 	}
 
 	return msg, nil
@@ -331,6 +419,10 @@ func (mc *MessageCodec) DecodeMessage(data []byte, contentType string) (*Message
 
 // EncodeData encodes arbitrary data using the specified codec
 func (mc *MessageCodec) EncodeData(data interface{}, codecName string) ([]byte, error) {
+	if codecName == "" {
+		return nil, NewError(ErrorCodeSerialization, "encode_data", "codec name cannot be empty")
+	}
+
 	codec, exists := mc.registry.Get(codecName)
 	if !exists {
 		return nil, NewError(ErrorCodeSerialization, "encode_data", "codec not found: "+codecName)
@@ -341,6 +433,16 @@ func (mc *MessageCodec) EncodeData(data interface{}, codecName string) ([]byte, 
 
 // DecodeData decodes bytes to arbitrary data using the specified codec
 func (mc *MessageCodec) DecodeData(data []byte, dest interface{}, codecName string) error {
+	if len(data) == 0 {
+		return NewError(ErrorCodeSerialization, "decode_data", "data cannot be empty")
+	}
+	if dest == nil {
+		return NewError(ErrorCodeSerialization, "decode_data", "destination cannot be nil")
+	}
+	if codecName == "" {
+		return NewError(ErrorCodeSerialization, "decode_data", "codec name cannot be empty")
+	}
+
 	codec, exists := mc.registry.Get(codecName)
 	if !exists {
 		return NewError(ErrorCodeSerialization, "decode_data", "codec not found: "+codecName)
@@ -349,25 +451,34 @@ func (mc *MessageCodec) DecodeData(data []byte, dest interface{}, codecName stri
 	return codec.Decode(data, dest)
 }
 
-// Global codec registry instance
-var globalCodecRegistry = NewCodecRegistry()
+// Global codec registry instance with thread-safe initialization
+var (
+	globalCodecRegistry *CodecRegistry
+	globalRegistryOnce  sync.Once
+)
 
 // GetGlobalCodecRegistry returns the global codec registry
 func GetGlobalCodecRegistry() *CodecRegistry {
+	globalRegistryOnce.Do(func() {
+		globalCodecRegistry = NewCodecRegistry()
+	})
 	return globalCodecRegistry
 }
 
 // RegisterCodec registers a codec in the global registry
 func RegisterCodec(codec Codec) {
-	globalCodecRegistry.Register(codec)
+	if codec == nil {
+		return // Silently ignore nil codecs
+	}
+	GetGlobalCodecRegistry().Register(codec)
 }
 
 // GetCodec retrieves a codec from the global registry
 func GetCodec(name string) (Codec, bool) {
-	return globalCodecRegistry.Get(name)
+	return GetGlobalCodecRegistry().Get(name)
 }
 
 // GetCodecByContentType retrieves a codec by content type from the global registry
 func GetCodecByContentType(contentType string) (Codec, bool) {
-	return globalCodecRegistry.GetByContentType(contentType)
+	return GetGlobalCodecRegistry().GetByContentType(contentType)
 }

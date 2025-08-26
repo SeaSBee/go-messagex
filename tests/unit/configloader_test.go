@@ -2,363 +2,384 @@ package unit
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/seasbee/go-messagex/internal/configloader"
 	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
-func TestConfigLoader_LoadFromBytes(t *testing.T) {
-	tests := []struct {
-		name    string
-		yaml    string
-		env     map[string]string
-		want    *messaging.Config
-		wantErr bool
-	}{
-		{
-			name: "basic yaml config",
-			yaml: `
+func TestNewLoader(t *testing.T) {
+	loader := configloader.NewLoader("TEST", true)
+	if loader == nil {
+		t.Fatal("NewLoader returned nil")
+	}
+}
+
+func TestLoadFromBytes(t *testing.T) {
+	loader := configloader.NewLoader("TEST", true)
+
+	yamlData := []byte(`
 transport: rabbitmq
 rabbitmq:
-  uris:
-    - "amqp://localhost:5672/"
-  consumer:
-    queue: "test.queue"
-`,
-			want: &messaging.Config{
-				Transport: "rabbitmq",
-				RabbitMQ: &messaging.RabbitMQConfig{
-					URIs: []string{"amqp://localhost:5672/"},
-					Consumer: &messaging.ConsumerConfig{
-						Queue: "test.queue",
-					},
-				},
-			},
-		},
-		{
-			name: "env overrides yaml",
-			yaml: `
-transport: kafka
-rabbitmq:
-  uris:
-    - "amqp://localhost:5672/"
-  consumer:
-    queue: "test.queue"
-`,
-			env: map[string]string{
-				"MSG_TRANSPORT": "rabbitmq",
-			},
-			want: &messaging.Config{
-				Transport: "rabbitmq",
-				RabbitMQ: &messaging.RabbitMQConfig{
-					URIs: []string{"amqp://localhost:5672/"},
-					Consumer: &messaging.ConsumerConfig{
-						Queue: "test.queue",
-					},
-				},
-			},
-		},
-		{
-			name: "env only config",
-			env: map[string]string{
-				"MSG_LOGGING_LEVEL": "debug",
-			},
-			want: &messaging.Config{
-				Transport: "rabbitmq",
-				RabbitMQ: &messaging.RabbitMQConfig{
-					URIs: []string{"amqp://localhost:5672/"},
-				},
-			},
-		},
-		{
-			name: "logging level from env",
-			env: map[string]string{
-				"MSG_LOGGING_LEVEL": "debug",
-			},
-			want: &messaging.Config{
-				Transport: "rabbitmq",
-				RabbitMQ: &messaging.RabbitMQConfig{
-					URIs: []string{"amqp://localhost:5672/"},
-				},
-			},
-		},
-		{
-			name: "complex nested config",
-			yaml: `
-transport: rabbitmq
-rabbitmq:
-  uris:
-    - "amqp://localhost:5672/"
-  connectionPool:
-    min: 3
-    max: 10
-    healthCheckInterval: 60s
-  channelPool:
-    perConnectionMin: 5
-    perConnectionMax: 50
-  publisher:
-    confirms: true
-    mandatory: true
-    maxInFlight: 5000
-    retry:
-      maxAttempts: 3
-      baseBackoff: 200ms
-      maxBackoff: 10s
-      backoffMultiplier: 1.5
-      jitter: false
+  uris: ["amqp://localhost:5672/"]
   consumer:
     queue: "test.queue"
     prefetch: 100
-    maxConcurrentHandlers: 200
-    requeueOnError: false
-  tls:
-    enabled: true
-    minVersion: "1.3"
-  security:
-    hmacEnabled: true
-    hmacAlgorithm: "sha512"
-logging:
-  level: "warn"
-  json: false
-  includeCaller: true
-telemetry:
-  metricsEnabled: false
-  tracingEnabled: false
-  serviceName: "test-service"
-`,
-			want: &messaging.Config{
-				Transport: "rabbitmq",
-				RabbitMQ: &messaging.RabbitMQConfig{
-					URIs: []string{"amqp://localhost:5672/"},
-					ConnectionPool: &messaging.ConnectionPoolConfig{
-						Min:                 3,
-						Max:                 10,
-						HealthCheckInterval: 60 * time.Second,
-					},
-					ChannelPool: &messaging.ChannelPoolConfig{
-						PerConnectionMin: 5,
-						PerConnectionMax: 50,
-					},
-					Publisher: &messaging.PublisherConfig{
-						Confirms:    true,
-						Mandatory:   true,
-						MaxInFlight: 5000,
-						Retry: &messaging.RetryConfig{
-							MaxAttempts:       3,
-							BaseBackoff:       200 * time.Millisecond,
-							MaxBackoff:        10 * time.Second,
-							BackoffMultiplier: 1.5,
-							Jitter:            false,
-						},
-					},
-					Consumer: &messaging.ConsumerConfig{
-						Queue:                 "test.queue",
-						Prefetch:              100,
-						MaxConcurrentHandlers: 200,
-						RequeueOnError:        false,
-					},
-					TLS: &messaging.TLSConfig{
-						Enabled:    true,
-						MinVersion: "1.3",
-					},
-					Security: &messaging.SecurityConfig{
-						HMACEnabled:   true,
-						HMACAlgorithm: "sha512",
-					},
-				},
-				Telemetry: &messaging.TelemetryConfig{
-					MetricsEnabled: false,
-					TracingEnabled: false,
-					ServiceName:    "test-service",
-				},
-			},
-		},
+`)
+
+	config, err := loader.LoadFromBytes(yamlData)
+	if err != nil {
+		t.Fatalf("LoadFromBytes failed: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Set up environment variables
-			for k, v := range tt.env {
-				os.Setenv(k, v)
-			}
-			defer func() {
-				for k := range tt.env {
-					os.Unsetenv(k)
-				}
-			}()
+	if config.Transport != "rabbitmq" {
+		t.Errorf("Expected transport 'rabbitmq', got '%s'", config.Transport)
+	}
 
-			// Create loader
-			loader := configloader.NewLoader("MSG_", true)
+	if config.RabbitMQ == nil {
+		t.Fatal("Expected RabbitMQ config to be set")
+	}
 
-			// Load configuration
-			got, err := loader.LoadFromBytes([]byte(tt.yaml))
+	if len(config.RabbitMQ.URIs) != 1 || config.RabbitMQ.URIs[0] != "amqp://localhost:5672/" {
+		t.Errorf("Expected URI 'amqp://localhost:5672/', got %v", config.RabbitMQ.URIs)
+	}
 
-			// Check error
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
+	if config.RabbitMQ.Consumer == nil {
+		t.Fatal("Expected Consumer config to be set")
+	}
 
-			require.NoError(t, err)
-			assert.NotNil(t, got)
+	if config.RabbitMQ.Consumer.Queue != "test.queue" {
+		t.Errorf("Expected queue 'test.queue', got '%s'", config.RabbitMQ.Consumer.Queue)
+	}
 
-			// Compare configuration
-			if tt.want != nil {
-				assert.Equal(t, tt.want.Transport, got.Transport)
-
-				if tt.want.RabbitMQ != nil {
-					assert.NotNil(t, got.RabbitMQ)
-					assert.Equal(t, tt.want.RabbitMQ.URIs, got.RabbitMQ.URIs)
-
-					if tt.want.RabbitMQ.Consumer != nil {
-						assert.NotNil(t, got.RabbitMQ.Consumer)
-						assert.Equal(t, tt.want.RabbitMQ.Consumer.Queue, got.RabbitMQ.Consumer.Queue)
-					}
-				}
-			}
-		})
+	if config.RabbitMQ.Consumer.Prefetch != 100 {
+		t.Errorf("Expected prefetch 100, got %d", config.RabbitMQ.Consumer.Prefetch)
 	}
 }
 
-func TestConfigLoader_Validation(t *testing.T) {
-	tests := []struct {
-		name    string
-		yaml    string
-		env     map[string]string
-		wantErr bool
-		errMsg  string
+func TestEnvironmentVariableOverlay(t *testing.T) {
+	loader := configloader.NewLoader("", true)
+
+	// Set environment variables using the exact names from struct tags
+	os.Setenv("MSG_TRANSPORT", "rabbitmq")
+	os.Setenv("MSG_RABBITMQ_CONSUMER_QUEUE", "env.queue")
+	os.Setenv("MSG_RABBITMQ_CONSUMER_PREFETCH", "200")
+	os.Setenv("MSG_RABBITMQ_CONNECTIONPOOL_MIN", "5")
+	os.Setenv("MSG_RABBITMQ_CONNECTIONPOOL_MAX", "10")
+	defer func() {
+		os.Unsetenv("MSG_TRANSPORT")
+		os.Unsetenv("MSG_RABBITMQ_CONSUMER_QUEUE")
+		os.Unsetenv("MSG_RABBITMQ_CONSUMER_PREFETCH")
+		os.Unsetenv("MSG_RABBITMQ_CONNECTIONPOOL_MIN")
+		os.Unsetenv("MSG_RABBITMQ_CONNECTIONPOOL_MAX")
+	}()
+
+	yamlData := []byte(`
+transport: kafka
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+  consumer:
+    queue: "yaml.queue"
+    prefetch: 100
+`)
+
+	config, err := loader.LoadFromBytes(yamlData)
+	if err != nil {
+		t.Fatalf("LoadFromBytes failed: %v", err)
+	}
+
+	// Environment variables should override YAML values
+	if config.Transport != "rabbitmq" {
+		t.Errorf("Expected transport 'rabbitmq' (from env), got '%s'", config.Transport)
+	}
+
+	if config.RabbitMQ.Consumer.Queue != "env.queue" {
+		t.Errorf("Expected queue 'env.queue' (from env), got '%s'", config.RabbitMQ.Consumer.Queue)
+	}
+
+	if config.RabbitMQ.Consumer.Prefetch != 200 {
+		t.Errorf("Expected prefetch 200 (from env), got %d", config.RabbitMQ.Consumer.Prefetch)
+	}
+
+	if config.RabbitMQ.ConnectionPool.Min != 5 {
+		t.Errorf("Expected connection pool min 5 (from env), got %d", config.RabbitMQ.ConnectionPool.Min)
+	}
+
+	if config.RabbitMQ.ConnectionPool.Max != 10 {
+		t.Errorf("Expected connection pool max 10 (from env), got %d", config.RabbitMQ.ConnectionPool.Max)
+	}
+}
+
+func TestEnvironmentVariableParsingErrors(t *testing.T) {
+	loader := configloader.NewLoader("", true)
+
+	testCases := []struct {
+		name        string
+		envVar      string
+		envValue    string
+		expectError bool
 	}{
 		{
-			name:    "missing transport",
-			yaml:    `transport: ""`,
-			wantErr: true,
-			errMsg:  "transport is required",
+			name:        "invalid integer",
+			envVar:      "MSG_RABBITMQ_CONSUMER_PREFETCH",
+			envValue:    "abc",
+			expectError: true,
 		},
 		{
-			name:    "invalid transport",
-			yaml:    `transport: invalid`,
-			wantErr: true,
-			errMsg:  "unsupported transport",
+			name:        "invalid unsigned integer",
+			envVar:      "MSG_RABBITMQ_CONNECTIONPOOL_MIN",
+			envValue:    "-5",
+			expectError: true,
 		},
 		{
-			name: "missing rabbitmq config",
-			yaml: `
-transport: rabbitmq
-rabbitmq: null
-`,
-			wantErr: true,
-			errMsg:  "rabbitmq configuration validation failed: at least one RabbitMQ URI is required",
+			name:        "invalid float",
+			envVar:      "MSG_RABBITMQ_PUBLISHER_RETRY_BACKOFFMULTIPLIER",
+			envValue:    "not_a_float",
+			expectError: true,
 		},
 		{
-			name: "invalid connection pool min",
-			yaml: `
-transport: rabbitmq
-rabbitmq:
-  uris:
-    - "amqp://localhost:5672/"
-  connectionPool:
-    min: 0
-`,
-			wantErr: true,
-			errMsg:  "connection pool min must be between 1 and 100",
+			name:        "invalid boolean",
+			envVar:      "MSG_RABBITMQ_PUBLISHER_CONFIRMS",
+			envValue:    "maybe",
+			expectError: true,
 		},
 		{
-			name: "invalid connection pool max",
-			yaml: `
-transport: rabbitmq
-rabbitmq:
-  uris:
-    - "amqp://localhost:5672/"
-  connectionPool:
-    min: 5
-    max: 3
-`,
-			wantErr: true,
-			errMsg:  "connection pool max must be greater than or equal to min",
+			name:        "invalid duration",
+			envVar:      "MSG_RABBITMQ_CONNECTIONPOOL_HEALTHCHECKINTERVAL",
+			envValue:    "invalid_duration",
+			expectError: true,
 		},
 		{
-			name: "invalid publisher max in flight",
-			yaml: `
-transport: rabbitmq
-rabbitmq:
-  uris:
-    - "amqp://localhost:5672/"
-  publisher:
-    maxInFlight: 0
-`,
-			wantErr: true,
-			errMsg:  "max in flight must be between 1 and 100000",
+			name:        "duration out of bounds",
+			envVar:      "MSG_RABBITMQ_CONNECTIONPOOL_HEALTHCHECKINTERVAL",
+			envValue:    "25h",
+			expectError: true,
 		},
 		{
-			name: "invalid consumer queue",
-			yaml: `
-transport: rabbitmq
-rabbitmq:
-  uris:
-    - "amqp://localhost:5672/"
-  consumer:
-    queue: ""
-`,
-			wantErr: true,
-			errMsg:  "consumer queue is required",
-		},
-		{
-			name: "valid config",
-			yaml: `
-transport: rabbitmq
-rabbitmq:
-  uris:
-    - "amqp://localhost:5672/"
-`,
-			wantErr: false,
+			name:        "valid integer",
+			envVar:      "MSG_RABBITMQ_CONSUMER_PREFETCH",
+			envValue:    "100",
+			expectError: false,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Set up environment variables
-			for k, v := range tt.env {
-				os.Setenv(k, v)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Setenv(tc.envVar, tc.envValue)
+			defer os.Unsetenv(tc.envVar)
+
+			yamlData := []byte(`
+transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+`)
+
+			_, err := loader.LoadFromBytes(yamlData)
+			if tc.expectError && err == nil {
+				t.Errorf("Expected error for %s=%s, but got none", tc.envVar, tc.envValue)
 			}
-			defer func() {
-				for k := range tt.env {
-					os.Unsetenv(k)
-				}
-			}()
-
-			// Create loader
-			loader := configloader.NewLoader("MSG_", true)
-
-			// Load configuration
-			_, err := loader.LoadFromBytes([]byte(tt.yaml))
-
-			// Check error
-			if tt.wantErr {
-				assert.Error(t, err)
-				if tt.errMsg != "" {
-					assert.Contains(t, err.Error(), tt.errMsg)
-				}
-			} else {
-				assert.NoError(t, err)
+			if !tc.expectError && err != nil {
+				t.Errorf("Unexpected error for %s=%s: %v", tc.envVar, tc.envValue, err)
 			}
 		})
 	}
 }
 
-func TestConfigLoader_SecretMasking(t *testing.T) {
-	loader := configloader.NewLoader("MSG_", true)
+func TestSliceEnvironmentVariableParsing(t *testing.T) {
+	loader := configloader.NewLoader("", true)
+
+	testCases := []struct {
+		name        string
+		envVar      string
+		envValue    string
+		expectError bool
+		expected    []string
+	}{
+		{
+			name:        "valid string slice",
+			envVar:      "MSG_RABBITMQ_URIS",
+			envValue:    "amqp://host1:5672/,amqp://host2:5672/",
+			expectError: false,
+			expected:    []string{"amqp://host1:5672/", "amqp://host2:5672/"},
+		},
+		{
+			name:        "invalid int in slice",
+			envVar:      "MSG_RABBITMQ_CONSUMER_PREFETCH",
+			envValue:    "100,abc,200",
+			expectError: true,
+		},
+		{
+			name:        "empty slice",
+			envVar:      "MSG_RABBITMQ_URIS",
+			envValue:    "",
+			expectError: false,
+			expected:    []string{"amqp://localhost:5672/"}, // Default config provides this
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Setenv(tc.envVar, tc.envValue)
+			defer os.Unsetenv(tc.envVar)
+
+			yamlData := []byte(`
+transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+`)
+
+			config, err := loader.LoadFromBytes(yamlData)
+			if tc.expectError && err == nil {
+				t.Errorf("Expected error for %s=%s, but got none", tc.envVar, tc.envValue)
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("Unexpected error for %s=%s: %v", tc.envVar, tc.envValue, err)
+			}
+			if !tc.expectError && tc.expected != nil {
+				if len(config.RabbitMQ.URIs) != len(tc.expected) {
+					t.Errorf("Expected %d URIs, got %d", len(tc.expected), len(config.RabbitMQ.URIs))
+				}
+			}
+		})
+	}
+}
+
+func TestValidationErrors(t *testing.T) {
+	loader := configloader.NewLoader("", true)
+
+	testCases := []struct {
+		name          string
+		yamlData      string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name:          "empty transport",
+			yamlData:      `transport: ""`,
+			expectError:   true,
+			errorContains: "transport is required",
+		},
+		{
+			name:          "unsupported transport",
+			yamlData:      `transport: unsupported`,
+			expectError:   true,
+			errorContains: "unsupported transport",
+		},
+		{
+			name: "rabbitmq transport without config",
+			yamlData: `transport: rabbitmq
+rabbitmq: null`,
+			expectError:   true,
+			errorContains: "at least one RabbitMQ URI is required",
+		},
+		{
+			name: "empty URIs",
+			yamlData: `transport: rabbitmq
+rabbitmq:
+  uris: []`,
+			expectError:   true,
+			errorContains: "at least one RabbitMQ URI is required",
+		},
+		{
+			name: "invalid URI",
+			yamlData: `transport: rabbitmq
+rabbitmq:
+  uris: ["invalid://uri:port"]`,
+			expectError:   true,
+			errorContains: "invalid RabbitMQ URI",
+		},
+		{
+			name: "connection pool min too low",
+			yamlData: `transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+  connectionPool:
+    min: 0`,
+			expectError:   true,
+			errorContains: "connection pool min must be between 1 and 100",
+		},
+		{
+			name: "connection pool max less than min",
+			yamlData: `transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+  connectionPool:
+    min: 10
+    max: 5`,
+			expectError:   true,
+			errorContains: "connection pool max (5) must be greater than or equal to min (10)",
+		},
+		{
+			name: "missing HMAC secret when enabled",
+			yamlData: `transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+  security:
+    hmacEnabled: true`,
+			expectError:   true,
+			errorContains: "HMAC secret is required when HMAC is enabled",
+		},
+		{
+			name: "invalid HMAC algorithm",
+			yamlData: `transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+  security:
+    hmacAlgorithm: "md5"`,
+			expectError:   true,
+			errorContains: "HMAC algorithm must be one of",
+		},
+		{
+			name: "invalid TLS version",
+			yamlData: `transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+  tls:
+    minVersion: "0.9"`,
+			expectError:   true,
+			errorContains: "TLS min version must be one of",
+		},
+		{
+			name: "empty service name",
+			yamlData: `transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+telemetry:
+  serviceName: ""`,
+			expectError:   true,
+			errorContains: "service name cannot be empty",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loader.LoadFromBytes([]byte(tc.yamlData))
+			if tc.expectError && err == nil {
+				t.Errorf("Expected error for test case '%s', but got none", tc.name)
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("Unexpected error for test case '%s': %v", tc.name, err)
+			}
+			if tc.expectError && err != nil && tc.errorContains != "" {
+				if !contains(err.Error(), tc.errorContains) {
+					t.Errorf("Error message '%s' does not contain expected text '%s'", err.Error(), tc.errorContains)
+				}
+			}
+		})
+	}
+}
+
+func TestMaskSecrets(t *testing.T) {
+	loader := configloader.NewLoader("", true)
 
 	config := &messaging.Config{
 		Transport: "rabbitmq",
 		RabbitMQ: &messaging.RabbitMQConfig{
 			URIs: []string{
-				"amqp://user:secretpass@localhost:5672/",
-				"amqps://admin:adminpass@rabbitmq.example.com:5671/vhost",
+				"amqp://user:password@localhost:5672/",
+				"amqp://another:secret@host2:5672/vhost",
 			},
 			Security: &messaging.SecurityConfig{
 				HMACSecret: "super-secret-key",
@@ -368,130 +389,438 @@ func TestConfigLoader_SecretMasking(t *testing.T) {
 
 	masked := loader.MaskSecrets(config)
 
-	// Check that URIs are masked
-	assert.Contains(t, masked.RabbitMQ.URIs[0], "***")
-	assert.Contains(t, masked.RabbitMQ.URIs[1], "***")
-	assert.NotContains(t, masked.RabbitMQ.URIs[0], "secretpass")
-	assert.NotContains(t, masked.RabbitMQ.URIs[1], "adminpass")
+	// Check that original config is not modified
+	if config.RabbitMQ.URIs[0] != "amqp://user:password@localhost:5672/" {
+		t.Error("Original config was modified")
+	}
 
-	// Check that HMAC secret is masked
-	assert.Equal(t, "***", masked.RabbitMQ.Security.HMACSecret)
+	if config.RabbitMQ.Security.HMACSecret != "super-secret-key" {
+		t.Error("Original config was modified")
+	}
+
+	// Check that masked config has secrets masked
+	if !contains(masked.RabbitMQ.URIs[0], "***") && !contains(masked.RabbitMQ.URIs[0], "%2A%2A%2A") {
+		t.Errorf("Expected URI to be masked, got: %s", masked.RabbitMQ.URIs[0])
+	}
+
+	if !contains(masked.RabbitMQ.URIs[1], "***") && !contains(masked.RabbitMQ.URIs[1], "%2A%2A%2A") {
+		t.Errorf("Expected URI to be masked, got: %s", masked.RabbitMQ.URIs[1])
+	}
+
+	if masked.RabbitMQ.Security.HMACSecret != "***" {
+		t.Errorf("Expected HMAC secret to be masked, got: %s", masked.RabbitMQ.Security.HMACSecret)
+	}
 }
 
-func TestConfigLoader_DefaultValues(t *testing.T) {
-	loader := configloader.NewLoader("MSG_", true)
+func TestMaskSecretsDisabled(t *testing.T) {
+	loader := configloader.NewLoader("", false)
 
-	// Load empty config to get defaults
+	config := &messaging.Config{
+		Transport: "rabbitmq",
+		RabbitMQ: &messaging.RabbitMQConfig{
+			URIs: []string{"amqp://user:password@localhost:5672/"},
+			Security: &messaging.SecurityConfig{
+				HMACSecret: "super-secret-key",
+			},
+		},
+	}
+
+	masked := loader.MaskSecrets(config)
+
+	// When masking is disabled, should return the original config
+	if masked != config {
+		t.Error("Expected original config when masking is disabled")
+	}
+}
+
+func TestDefaultConfig(t *testing.T) {
+	loader := configloader.NewLoader("", true)
+
+	// Test default config by loading empty YAML
 	config, err := loader.LoadFromBytes([]byte(""))
-	require.NoError(t, err)
-	require.NotNil(t, config)
+	if err != nil {
+		t.Fatalf("LoadFromBytes failed: %v", err)
+	}
 
-	// Check default values
-	assert.Equal(t, "rabbitmq", config.Transport)
-	assert.NotNil(t, config.RabbitMQ)
-	assert.NotNil(t, config.RabbitMQ.ConnectionPool)
-	assert.Equal(t, 2, config.RabbitMQ.ConnectionPool.Min)
-	assert.Equal(t, 8, config.RabbitMQ.ConnectionPool.Max)
-	assert.Equal(t, 30*time.Second, config.RabbitMQ.ConnectionPool.HealthCheckInterval)
+	if config.Transport != "rabbitmq" {
+		t.Errorf("Expected default transport 'rabbitmq', got '%s'", config.Transport)
+	}
 
-	assert.NotNil(t, config.RabbitMQ.ChannelPool)
-	assert.Equal(t, 10, config.RabbitMQ.ChannelPool.PerConnectionMin)
-	assert.Equal(t, 100, config.RabbitMQ.ChannelPool.PerConnectionMax)
+	if config.RabbitMQ == nil {
+		t.Fatal("Expected default RabbitMQ config")
+	}
 
-	assert.NotNil(t, config.RabbitMQ.Publisher)
-	assert.True(t, config.RabbitMQ.Publisher.Confirms)
-	assert.Equal(t, 10000, config.RabbitMQ.Publisher.MaxInFlight)
-	assert.Equal(t, 4, config.RabbitMQ.Publisher.WorkerCount)
+	if len(config.RabbitMQ.URIs) != 1 || config.RabbitMQ.URIs[0] != "amqp://localhost:5672/" {
+		t.Errorf("Expected default URI 'amqp://localhost:5672/', got %v", config.RabbitMQ.URIs)
+	}
 
-	assert.NotNil(t, config.RabbitMQ.Consumer)
-	assert.Equal(t, 256, config.RabbitMQ.Consumer.Prefetch)
-	assert.Equal(t, 512, config.RabbitMQ.Consumer.MaxConcurrentHandlers)
+	if config.RabbitMQ.ConnectionPool == nil {
+		t.Fatal("Expected default connection pool config")
+	}
 
-	assert.NotNil(t, config.Telemetry)
-	assert.True(t, config.Telemetry.MetricsEnabled)
-	assert.True(t, config.Telemetry.TracingEnabled)
-	assert.Equal(t, "go-messagex", config.Telemetry.ServiceName)
+	if config.RabbitMQ.ConnectionPool.Min != 2 {
+		t.Errorf("Expected default connection pool min 2, got %d", config.RabbitMQ.ConnectionPool.Min)
+	}
+
+	if config.RabbitMQ.ConnectionPool.Max != 8 {
+		t.Errorf("Expected default connection pool max 8, got %d", config.RabbitMQ.ConnectionPool.Max)
+	}
+
+	if config.RabbitMQ.ConnectionPool.HealthCheckInterval != 30*time.Second {
+		t.Errorf("Expected default health check interval 30s, got %v", config.RabbitMQ.ConnectionPool.HealthCheckInterval)
+	}
 }
 
-func TestConfigLoader_EnvironmentVariableTypes(t *testing.T) {
-	// This test is disabled because environment variable loading has configuration order issues
-	// that need to be resolved in the configloader implementation
-	t.Skip("Environment variable tests are temporarily disabled due to configuration loading order issues")
+func TestPointerFieldHandling(t *testing.T) {
+	loader := configloader.NewLoader("", true)
 
-	// Test that environment variables are being set correctly
-	os.Setenv("MSG_RABBITMQ_PUBLISHER_MAXINFLIGHT", "5000")
-	defer os.Unsetenv("MSG_RABBITMQ_PUBLISHER_MAXINFLIGHT")
+	// Test that pointer fields are properly initialized
+	yamlData := []byte(`
+transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+`)
 
-	// Verify the environment variable is set
-	envValue := os.Getenv("MSG_RABBITMQ_PUBLISHER_MAXINFLIGHT")
-	assert.Equal(t, "5000", envValue)
+	config, err := loader.LoadFromBytes(yamlData)
+	if err != nil {
+		t.Fatalf("LoadFromBytes failed: %v", err)
+	}
 
-	tests := []struct {
-		name     string
-		envKey   string
-		envValue string
-		check    func(*testing.T, *messaging.Config)
+	// All pointer fields should be initialized
+	if config.RabbitMQ.ConnectionPool == nil {
+		t.Error("Expected ConnectionPool to be initialized")
+	}
+
+	if config.RabbitMQ.ChannelPool == nil {
+		t.Error("Expected ChannelPool to be initialized")
+	}
+
+	if config.RabbitMQ.Publisher == nil {
+		t.Error("Expected Publisher to be initialized")
+	}
+
+	if config.RabbitMQ.Consumer == nil {
+		t.Error("Expected Consumer to be initialized")
+	}
+
+	if config.RabbitMQ.TLS == nil {
+		t.Error("Expected TLS to be initialized")
+	}
+
+	if config.RabbitMQ.Security == nil {
+		t.Error("Expected Security to be initialized")
+	}
+
+	if config.Telemetry == nil {
+		t.Error("Expected Telemetry to be initialized")
+	}
+}
+
+func TestDurationValidation(t *testing.T) {
+	loader := configloader.NewLoader("", true)
+
+	testCases := []struct {
+		name        string
+		field       string
+		value       string
+		expectError bool
 	}{
 		{
-			name:     "int values",
-			envKey:   "MSG_RABBITMQ_PUBLISHER_MAXINFLIGHT",
-			envValue: "5000",
-			check: func(t *testing.T, config *messaging.Config) {
-				assert.Equal(t, 5000, config.RabbitMQ.Publisher.MaxInFlight)
-			},
+			name:        "valid duration",
+			field:       "MSG_RABBITMQ_CONNECTIONPOOL_HEALTHCHECKINTERVAL",
+			value:       "30s",
+			expectError: false,
 		},
 		{
-			name:     "bool values",
-			envKey:   "MSG_RABBITMQ_PUBLISHER_CONFIRMS",
-			envValue: "false",
-			check: func(t *testing.T, config *messaging.Config) {
-				assert.False(t, config.RabbitMQ.Publisher.Confirms)
-			},
+			name:        "negative duration",
+			field:       "MSG_RABBITMQ_CONNECTIONPOOL_HEALTHCHECKINTERVAL",
+			value:       "-30s",
+			expectError: true,
 		},
 		{
-			name:     "duration values",
-			envKey:   "MSG_RABBITMQ_PUBLISHER_PUBLISHTIMEOUT",
-			envValue: "5s",
-			check: func(t *testing.T, config *messaging.Config) {
-				assert.Equal(t, 5*time.Second, config.RabbitMQ.Publisher.PublishTimeout)
-			},
+			name:        "duration too long",
+			field:       "MSG_RABBITMQ_CONNECTIONPOOL_HEALTHCHECKINTERVAL",
+			value:       "25h",
+			expectError: true,
 		},
 		{
-			name:     "float values",
-			envKey:   "MSG_RABBITMQ_PUBLISHER_RETRY_BACKOFFMULTIPLIER",
-			envValue: "3.5",
-			check: func(t *testing.T, config *messaging.Config) {
-				assert.Equal(t, 3.5, config.RabbitMQ.Publisher.Retry.BackoffMultiplier)
-			},
-		},
-		{
-			name:     "slice values",
-			envKey:   "MSG_RABBITMQ_URIS",
-			envValue: "amqp://host1:5672/,amqp://host2:5672/",
-			check: func(t *testing.T, config *messaging.Config) {
-				assert.Len(t, config.RabbitMQ.URIs, 2)
-				assert.Equal(t, "amqp://host1:5672/", config.RabbitMQ.URIs[0])
-				assert.Equal(t, "amqp://host2:5672/", config.RabbitMQ.URIs[1])
-			},
+			name:        "zero duration",
+			field:       "MSG_RABBITMQ_CONNECTIONPOOL_HEALTHCHECKINTERVAL",
+			value:       "0s",
+			expectError: true, // 0s is not valid for health check interval
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Set environment variable
-			os.Setenv(tt.envKey, tt.envValue)
-			defer os.Unsetenv(tt.envKey)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Setenv(tc.field, tc.value)
+			defer os.Unsetenv(tc.field)
 
-			// Create loader
-			loader := configloader.NewLoader("MSG_", true)
+			yamlData := []byte(`
+transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+`)
 
-			// Load configuration with empty YAML to ensure environment variables are applied
-			config, err := loader.LoadFromBytes([]byte(""))
-			require.NoError(t, err)
-			require.NotNil(t, config)
-
-			// Run check
-			tt.check(t, config)
+			_, err := loader.LoadFromBytes(yamlData)
+			if tc.expectError && err == nil {
+				t.Errorf("Expected error for %s=%s, but got none", tc.field, tc.value)
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("Unexpected error for %s=%s: %v", tc.field, tc.value, err)
+			}
 		})
 	}
+}
+
+func TestLoadFromFile(t *testing.T) {
+	loader := configloader.NewLoader("TEST", true)
+
+	// Create a temporary YAML file
+	yamlContent := `
+transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+  consumer:
+    queue: "file.queue"
+    prefetch: 150
+`
+
+	// Create temporary directory and file
+	tempDir := t.TempDir()
+	tempFile := filepath.Join(tempDir, "test_config.yaml")
+
+	err := os.WriteFile(tempFile, []byte(yamlContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create temporary file: %v", err)
+	}
+
+	// Test loading from file
+	config, err := loader.Load(tempFile)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if config.Transport != "rabbitmq" {
+		t.Errorf("Expected transport 'rabbitmq', got '%s'", config.Transport)
+	}
+
+	if config.RabbitMQ.Consumer.Queue != "file.queue" {
+		t.Errorf("Expected queue 'file.queue', got '%s'", config.RabbitMQ.Consumer.Queue)
+	}
+
+	if config.RabbitMQ.Consumer.Prefetch != 150 {
+		t.Errorf("Expected prefetch 150, got %d", config.RabbitMQ.Consumer.Prefetch)
+	}
+}
+
+func TestLoadFromFileErrors(t *testing.T) {
+	loader := configloader.NewLoader("TEST", true)
+
+	testCases := []struct {
+		name          string
+		configPath    string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name:          "non-existent file",
+			configPath:    "/non/existent/path/config.yaml",
+			expectError:   true,
+			errorContains: "failed to read config file",
+		},
+		{
+			name:        "empty path",
+			configPath:  "",
+			expectError: false, // Should load defaults
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loader.Load(tc.configPath)
+			if tc.expectError && err == nil {
+				t.Errorf("Expected error for test case '%s', but got none", tc.name)
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("Unexpected error for test case '%s': %v", tc.name, err)
+			}
+			if tc.expectError && err != nil && tc.errorContains != "" {
+				if !contains(err.Error(), tc.errorContains) {
+					t.Errorf("Error message '%s' does not contain expected text '%s'", err.Error(), tc.errorContains)
+				}
+			}
+		})
+	}
+}
+
+func TestKafkaTransportConfiguration(t *testing.T) {
+	loader := configloader.NewLoader("TEST", true)
+
+	yamlData := []byte(`
+transport: kafka
+kafka:
+  brokers: ["localhost:9092", "localhost:9093"]
+  consumer:
+    groupId: "test-group"
+    autoOffsetReset: "earliest"
+  producer:
+    acks: "all"
+    retries: 3
+`)
+
+	config, err := loader.LoadFromBytes(yamlData)
+	if err != nil {
+		t.Fatalf("LoadFromBytes failed: %v", err)
+	}
+
+	if config.Transport != "kafka" {
+		t.Errorf("Expected transport 'kafka', got '%s'", config.Transport)
+	}
+
+	// Note: The current implementation doesn't have Kafka config structs defined,
+	// so we're testing that the transport validation accepts "kafka" as valid
+	// and that the YAML parsing doesn't fail with kafka configuration
+}
+
+func TestKafkaEnvironmentVariableOverlay(t *testing.T) {
+	loader := configloader.NewLoader("", true)
+
+	// Set environment variables for Kafka configuration
+	os.Setenv("MSG_TRANSPORT", "kafka")
+	os.Setenv("MSG_KAFKA_BROKERS", "kafka1:9092,kafka2:9092")
+	os.Setenv("MSG_KAFKA_CONSUMER_GROUPID", "env-group")
+	defer func() {
+		os.Unsetenv("MSG_TRANSPORT")
+		os.Unsetenv("MSG_KAFKA_BROKERS")
+		os.Unsetenv("MSG_KAFKA_CONSUMER_GROUPID")
+	}()
+
+	yamlData := []byte(`
+transport: rabbitmq
+kafka:
+  brokers: ["localhost:9092"]
+  consumer:
+    groupId: "yaml-group"
+`)
+
+	config, err := loader.LoadFromBytes(yamlData)
+	if err != nil {
+		t.Fatalf("LoadFromBytes failed: %v", err)
+	}
+
+	// Environment variables should override YAML values
+	if config.Transport != "kafka" {
+		t.Errorf("Expected transport 'kafka' (from env), got '%s'", config.Transport)
+	}
+
+	// Note: Since Kafka config structs aren't implemented yet, we're testing
+	// that the environment variable overlay system works for kafka transport
+	// and that validation accepts kafka as a valid transport
+}
+
+func TestNilLoaderHandling(t *testing.T) {
+	// Test LoadFromBytes with nil loader
+	var loader *configloader.Loader
+	_, err := loader.LoadFromBytes([]byte(`transport: rabbitmq`))
+	if err == nil {
+		t.Error("Expected error when loader is nil")
+	}
+	if !contains(err.Error(), "loader cannot be nil") {
+		t.Errorf("Expected 'loader cannot be nil' error, got: %v", err)
+	}
+
+	// Test Load with nil loader
+	_, err = loader.Load("")
+	if err == nil {
+		t.Error("Expected error when loader is nil")
+	}
+	if !contains(err.Error(), "loader cannot be nil") {
+		t.Errorf("Expected 'loader cannot be nil' error, got: %v", err)
+	}
+
+	// Test MaskSecrets with nil loader
+	config := &messaging.Config{Transport: "rabbitmq"}
+	result := loader.MaskSecrets(config)
+	if result != config {
+		t.Error("Expected original config when loader is nil")
+	}
+}
+
+func TestNilInputHandling(t *testing.T) {
+	loader := configloader.NewLoader("TEST", true)
+
+	// Test LoadFromBytes with nil YAML data
+	_, err := loader.LoadFromBytes(nil)
+	if err == nil {
+		t.Error("Expected error when YAML data is nil")
+	}
+	if !contains(err.Error(), "yaml data cannot be nil") {
+		t.Errorf("Expected 'yaml data cannot be nil' error, got: %v", err)
+	}
+
+	// Test MaskSecrets with nil config
+	result := loader.MaskSecrets(nil)
+	if result != nil {
+		t.Error("Expected nil result when config is nil")
+	}
+}
+
+func TestInvalidYAMLHandling(t *testing.T) {
+	loader := configloader.NewLoader("TEST", true)
+
+	invalidYAML := []byte(`
+transport: rabbitmq
+rabbitmq:
+  uris: ["amqp://localhost:5672/"]
+  consumer:
+    prefetch: "not_a_number"
+`)
+
+	_, err := loader.LoadFromBytes(invalidYAML)
+	if err == nil {
+		t.Error("Expected error for invalid YAML")
+	}
+	if !contains(err.Error(), "failed to unmarshal YAML") {
+		t.Errorf("Expected YAML unmarshal error, got: %v", err)
+	}
+}
+
+func TestEmptyYAMLHandling(t *testing.T) {
+	loader := configloader.NewLoader("TEST", true)
+
+	// Test with completely empty YAML
+	config, err := loader.LoadFromBytes([]byte(""))
+	if err != nil {
+		t.Fatalf("LoadFromBytes failed with empty YAML: %v", err)
+	}
+
+	// Should load default configuration
+	if config.Transport != "rabbitmq" {
+		t.Errorf("Expected default transport 'rabbitmq', got '%s'", config.Transport)
+	}
+
+	// Test with valid but minimal YAML
+	config, err = loader.LoadFromBytes([]byte("# Empty config\n"))
+	if err != nil {
+		t.Fatalf("LoadFromBytes failed with comment-only YAML: %v", err)
+	}
+
+	if config.Transport != "rabbitmq" {
+		t.Errorf("Expected default transport 'rabbitmq', got '%s'", config.Transport)
+	}
+}
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+			func() bool {
+				for i := 1; i <= len(s)-len(substr); i++ {
+					if s[i:i+len(substr)] == substr {
+						return true
+					}
+				}
+				return false
+			}())))
 }

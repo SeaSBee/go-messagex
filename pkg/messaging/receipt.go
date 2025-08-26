@@ -22,13 +22,20 @@ type receipt struct {
 // NewReceipt creates a new receipt for tracking async publish operations.
 func NewReceipt(ctx context.Context, id string, timeout time.Duration) Receipt {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
-	return &receipt{
+	r := &receipt{
 		id:      id,
 		ctx:     ctx,
 		cancel:  cancel,
 		done:    make(chan struct{}),
 		timeout: timeout,
 	}
+
+	// Handle case where parent context is already cancelled
+	if ctx.Err() != nil {
+		r.complete(PublishResult{}, ctx.Err())
+	}
+
+	return r
 }
 
 // ID returns the unique identifier for this receipt.
@@ -90,13 +97,19 @@ type ReceiptManager struct {
 	receipts map[string]*receipt
 	mu       sync.RWMutex
 	timeout  time.Duration
+	done     chan struct{}
+	once     sync.Once
+	// Channel to signal when receipts are completed for efficient waiting
+	completionChan chan struct{}
 }
 
 // NewReceiptManager creates a new receipt manager.
 func NewReceiptManager(timeout time.Duration) *ReceiptManager {
 	return &ReceiptManager{
-		receipts: make(map[string]*receipt),
-		timeout:  timeout,
+		receipts:       make(map[string]*receipt),
+		timeout:        timeout,
+		done:           make(chan struct{}),
+		completionChan: make(chan struct{}, 1), // Buffered to prevent blocking
 	}
 }
 
@@ -104,6 +117,16 @@ func NewReceiptManager(timeout time.Duration) *ReceiptManager {
 func (rm *ReceiptManager) CreateReceipt(ctx context.Context, id string) Receipt {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+
+	// Check if manager is closed
+	select {
+	case <-rm.done:
+		// Manager is closed, return a receipt that's already completed with error
+		r := NewReceipt(ctx, id, rm.timeout).(*receipt)
+		r.CompleteError(ErrPublisherClosed)
+		return r
+	default:
+	}
 
 	r := NewReceipt(ctx, id, rm.timeout).(*receipt)
 	rm.receipts[id] = r
@@ -125,10 +148,10 @@ func (rm *ReceiptManager) GetReceipt(id string) (Receipt, bool) {
 
 // CompleteReceipt marks a receipt as complete.
 func (rm *ReceiptManager) CompleteReceipt(id string, result PublishResult, err error) bool {
-	rm.mu.RLock()
-	r, exists := rm.receipts[id]
-	rm.mu.RUnlock()
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
 
+	r, exists := rm.receipts[id]
 	if !exists {
 		return false
 	}
@@ -139,12 +162,30 @@ func (rm *ReceiptManager) CompleteReceipt(id string, result PublishResult, err e
 
 // cleanupReceipt removes a receipt from the manager after it's complete.
 func (rm *ReceiptManager) cleanupReceipt(r *receipt) {
-	<-r.Done()
+	// Wait for receipt completion with timeout to prevent goroutine leaks
+	select {
+	case <-r.Done():
+		// Receipt completed normally
+	case <-time.After(rm.timeout + 5*time.Second): // Extra buffer for cleanup
+		// Timeout reached, force completion to prevent leak
+		r.CompleteError(TimeoutError("cleanup", ErrTimeout))
+	case <-rm.done:
+		// Manager is closing, force completion and cleanup
+		r.CompleteError(ErrPublisherClosed)
+	}
 
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
+	// Always clean up the receipt, even if manager is closing
 	delete(rm.receipts, r.id)
+
+	// Signal completion for efficient waiting
+	select {
+	case rm.completionChan <- struct{}{}:
+	default:
+		// Channel is full, another signal already sent
+	}
 }
 
 // PendingCount returns the number of pending receipts.
@@ -157,20 +198,34 @@ func (rm *ReceiptManager) PendingCount() int {
 
 // Close closes all pending receipts and cleans up the manager.
 func (rm *ReceiptManager) Close() {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
+	rm.once.Do(func() {
+		close(rm.done)
 
-	for _, r := range rm.receipts {
-		r.CompleteError(ErrPublisherClosed)
-	}
+		rm.mu.Lock()
+		defer rm.mu.Unlock()
 
-	// Clear the map
-	rm.receipts = make(map[string]*receipt)
+		for _, r := range rm.receipts {
+			r.CompleteError(ErrPublisherClosed)
+		}
+
+		// Clear the map
+		rm.receipts = make(map[string]*receipt)
+	})
 }
 
 // DrainWithTimeout waits for all pending receipts to complete or times out.
 func (rm *ReceiptManager) DrainWithTimeout(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+
+	// Use a more efficient approach with periodic checks and channel-based waiting
+	ticker := time.NewTicker(50 * time.Millisecond) // Reduced polling interval for better responsiveness
+	defer ticker.Stop()
+
+	// Drain any existing completion signals
+	select {
+	case <-rm.completionChan:
+	default:
+	}
 
 	for {
 		count := rm.PendingCount()
@@ -182,7 +237,18 @@ func (rm *ReceiptManager) DrainWithTimeout(timeout time.Duration) error {
 			return TimeoutError("drain_receipts", ErrTimeout)
 		}
 
-		time.Sleep(10 * time.Millisecond)
+		// Wait for either a completion signal or the next tick
+		select {
+		case <-rm.completionChan:
+			// A receipt completed, check count immediately
+			continue
+		case <-ticker.C:
+			// Periodic check
+			continue
+		case <-rm.done:
+			// Manager is closing
+			return ErrPublisherClosed
+		}
 	}
 }
 
@@ -190,6 +256,13 @@ func (rm *ReceiptManager) DrainWithTimeout(timeout time.Duration) error {
 func AwaitAll(ctx context.Context, receipts ...Receipt) error {
 	if len(receipts) == 0 {
 		return nil
+	}
+
+	// Check for nil receipts
+	for _, r := range receipts {
+		if r == nil {
+			return ErrInvalidMessage
+		}
 	}
 
 	// Create a channel to signal completion
@@ -229,8 +302,15 @@ func AwaitAny(ctx context.Context, receipts ...Receipt) (Receipt, error) {
 		return nil, ErrInvalidMessage
 	}
 
+	// Check for nil receipts
+	for _, r := range receipts {
+		if r == nil {
+			return nil, ErrInvalidMessage
+		}
+	}
+
 	// Create a channel to signal first completion
-	done := make(chan Receipt, len(receipts))
+	done := make(chan Receipt, 1) // Buffer of 1 is sufficient
 
 	// Wait for any receipt
 	for _, r := range receipts {
@@ -262,6 +342,10 @@ func GetResults(receipts ...Receipt) ([]PublishResult, []error) {
 	errors := make([]error, len(receipts))
 
 	for i, r := range receipts {
+		if r == nil {
+			errors[i] = ErrInvalidMessage
+			continue
+		}
 		results[i], errors[i] = r.Result()
 	}
 
@@ -271,6 +355,9 @@ func GetResults(receipts ...Receipt) ([]PublishResult, []error) {
 // AllSuccessful checks if all receipts completed successfully.
 func AllSuccessful(receipts ...Receipt) bool {
 	for _, r := range receipts {
+		if r == nil {
+			return false
+		}
 		_, err := r.Result()
 		if err != nil {
 			return false
@@ -282,6 +369,9 @@ func AllSuccessful(receipts ...Receipt) bool {
 // AnyFailed checks if any receipt failed.
 func AnyFailed(receipts ...Receipt) bool {
 	for _, r := range receipts {
+		if r == nil {
+			return true
+		}
 		_, err := r.Result()
 		if err != nil {
 			return true

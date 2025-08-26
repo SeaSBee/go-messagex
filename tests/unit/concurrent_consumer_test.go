@@ -184,8 +184,12 @@ func TestConsumerWrapper(t *testing.T) {
 		transport := &rabbitmq.Transport{}
 		obsCtx := createTestObservabilityContextForConsumer()
 
-		consumer := rabbitmq.NewConsumer(transport, config, obsCtx)
+		consumer, err := rabbitmq.NewConsumer(transport, config, obsCtx)
+		assert.NoError(t, err)
 		assert.NotNil(t, consumer)
+
+		// Test IsInitialized method
+		assert.True(t, consumer.IsInitialized())
 	})
 
 	t.Run("ConsumerDelegation", func(t *testing.T) {
@@ -204,17 +208,22 @@ func TestConsumerWrapper(t *testing.T) {
 		transport := &rabbitmq.Transport{}
 		obsCtx := createTestObservabilityContextForConsumer()
 
-		consumer := rabbitmq.NewConsumer(transport, config, obsCtx)
+		consumer, err := rabbitmq.NewConsumer(transport, config, obsCtx)
+		assert.NoError(t, err)
+		assert.NotNil(t, consumer)
 
 		// Test DLQ setting
 		dlq := &messaging.DeadLetterQueue{}
-		consumer.SetDLQ(dlq)
+		err = consumer.SetDLQ(dlq)
+		assert.NoError(t, err)
 
 		// Test stats
-		stats := consumer.GetStats()
+		stats, err := consumer.GetStats()
+		assert.NoError(t, err)
 		assert.NotNil(t, stats)
 
-		workerStats := consumer.GetWorkerStats()
+		workerStats, err := consumer.GetWorkerStats()
+		assert.NoError(t, err)
 		assert.Empty(t, workerStats) // No workers started yet
 	})
 
@@ -234,11 +243,13 @@ func TestConsumerWrapper(t *testing.T) {
 		transport := &rabbitmq.Transport{}
 		obsCtx := createTestObservabilityContextForConsumer()
 
-		consumer := rabbitmq.NewConsumer(transport, config, obsCtx)
+		consumer, err := rabbitmq.NewConsumer(transport, config, obsCtx)
+		assert.NoError(t, err)
+		assert.NotNil(t, consumer)
 
 		// Test that we can create multiple stop calls safely
 		ctx := context.Background()
-		err := consumer.Stop(ctx)
+		err = consumer.Stop(ctx)
 		assert.NoError(t, err)
 
 		// Second stop should also work

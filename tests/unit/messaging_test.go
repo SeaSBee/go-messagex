@@ -16,12 +16,13 @@ import (
 func TestMessage(t *testing.T) {
 	t.Run("NewMessage", func(t *testing.T) {
 		body := []byte(`{"test": "data"}`)
-		msg := messaging.NewMessage(body)
+		msg := messaging.NewMessage(body, messaging.WithKey("test.key"))
 
 		assert.NotNil(t, msg)
 		assert.Equal(t, body, msg.Body)
 		assert.NotEmpty(t, msg.ID)
 		assert.NotZero(t, msg.Timestamp)
+		assert.Equal(t, "test.key", msg.Key)
 	})
 
 	t.Run("MessageWithOptions", func(t *testing.T) {
@@ -48,12 +49,14 @@ func TestMessage(t *testing.T) {
 		msg := messaging.NewMessage(body,
 			messaging.WithID("test-123"),
 			messaging.WithContentType("application/json"),
+			messaging.WithKey("test.key"),
 		)
 
 		// Test that message has expected properties
 		assert.Equal(t, "test-123", msg.ID)
 		assert.Equal(t, body, msg.Body)
 		assert.Equal(t, "application/json", msg.ContentType)
+		assert.Equal(t, "test.key", msg.Key)
 	})
 }
 
@@ -255,7 +258,7 @@ func TestMockConsumer(t *testing.T) {
 		msg := receivedMsg
 		mu.Unlock()
 		assert.NotNil(t, msg)
-		assert.Equal(t, testMsg.ID, msg.ID)
+		assert.Equal(t, testMsg.ID, msg.ID, "Message ID should match the sent message")
 
 		err = consumer.Stop(ctx)
 		assert.NoError(t, err)

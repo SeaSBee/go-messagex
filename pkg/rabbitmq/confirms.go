@@ -26,8 +26,35 @@ type ConfirmTracker struct {
 	wg            sync.WaitGroup
 }
 
+// ConfirmTrackerConfig holds configuration for the confirm tracker.
+type ConfirmTrackerConfig struct {
+	ConfirmBufferSize int
+	ReturnBufferSize  int
+}
+
+// DefaultConfirmTrackerConfig returns default configuration.
+func DefaultConfirmTrackerConfig() *ConfirmTrackerConfig {
+	return &ConfirmTrackerConfig{
+		ConfirmBufferSize: 1000,
+		ReturnBufferSize:  100,
+	}
+}
+
 // NewConfirmTracker creates a new confirm tracker for a channel.
 func NewConfirmTracker(channel *amqp091.Channel, observability *messaging.ObservabilityContext) (*ConfirmTracker, error) {
+	return NewConfirmTrackerWithConfig(channel, observability, DefaultConfirmTrackerConfig())
+}
+
+// NewConfirmTrackerWithConfig creates a new confirm tracker with custom configuration.
+func NewConfirmTrackerWithConfig(channel *amqp091.Channel, observability *messaging.ObservabilityContext, config *ConfirmTrackerConfig) (*ConfirmTracker, error) {
+	// Validate inputs
+	if channel == nil {
+		return nil, messaging.NewError(messaging.ErrorCodeChannel, "nil_channel", "channel cannot be nil")
+	}
+	if config == nil {
+		config = DefaultConfirmTrackerConfig()
+	}
+
 	// Enable confirm mode on the channel
 	if err := channel.Confirm(false); err != nil {
 		return nil, messaging.WrapError(messaging.ErrorCodeChannel, "enable_confirms", "failed to enable confirm mode", err)
@@ -40,8 +67,8 @@ func NewConfirmTracker(channel *amqp091.Channel, observability *messaging.Observ
 		publishTimes:  make(map[uint64]time.Time),
 		nextTag:       1,
 		observability: observability,
-		confirmChan:   make(chan amqp091.Confirmation, 1000),
-		returnChan:    make(chan amqp091.Return, 100),
+		confirmChan:   make(chan amqp091.Confirmation, config.ConfirmBufferSize),
+		returnChan:    make(chan amqp091.Return, config.ReturnBufferSize),
 	}
 
 	// Set up notification channels
@@ -58,6 +85,15 @@ func NewConfirmTracker(channel *amqp091.Channel, observability *messaging.Observ
 
 // TrackMessage tracks a message for confirmation and returns the delivery tag.
 func (ct *ConfirmTracker) TrackMessage(messageID string, receiptMgr *messaging.ReceiptManager) uint64 {
+	// Validate inputs
+	if receiptMgr == nil {
+		if ct.observability != nil {
+			ct.observability.Logger().Error("cannot track message with nil receipt manager",
+				logx.String("message_id", messageID))
+		}
+		return 0
+	}
+
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 
@@ -98,19 +134,25 @@ func (ct *ConfirmTracker) processConfirmation(confirm amqp091.Confirmation) {
 	ct.mu.Unlock()
 
 	if !exists {
-		ct.observability.Logger().Warn("received confirmation for unknown delivery tag",
-			logx.Int64("delivery_tag", int64(confirm.DeliveryTag)))
+		if ct.observability != nil {
+			ct.observability.Logger().Warn("received confirmation for unknown delivery tag",
+				logx.Int64("delivery_tag", int64(confirm.DeliveryTag)))
+		}
 		return
 	}
-
-	// Record confirmation metrics
-	ct.observability.Metrics().ConfirmTotal("rabbitmq")
 
 	// Calculate confirmation duration
 	var confirmDuration time.Duration
 	if timeExists {
 		confirmDuration = time.Since(publishTime)
-		ct.observability.Metrics().ConfirmDuration("rabbitmq", confirmDuration)
+	}
+
+	// Record confirmation metrics if observability is available
+	if ct.observability != nil {
+		ct.observability.Metrics().ConfirmTotal("rabbitmq")
+		if timeExists {
+			ct.observability.Metrics().ConfirmDuration("rabbitmq", confirmDuration)
+		}
 	}
 
 	result := messaging.PublishResult{
@@ -121,13 +163,17 @@ func (ct *ConfirmTracker) processConfirmation(confirm amqp091.Confirmation) {
 
 	var err error
 	if confirm.Ack {
-		ct.observability.Metrics().ConfirmSuccess("rabbitmq")
-		ct.observability.RecordPublishMetrics("rabbitmq", "", confirmDuration, true, "")
+		if ct.observability != nil {
+			ct.observability.Metrics().ConfirmSuccess("rabbitmq")
+			ct.observability.RecordPublishMetrics("rabbitmq", "", confirmDuration, true, "")
+		}
 		receiptMgr.CompleteReceipt("", result, nil)
 	} else {
-		ct.observability.Metrics().ConfirmFailure("rabbitmq", "nacked")
+		if ct.observability != nil {
+			ct.observability.Metrics().ConfirmFailure("rabbitmq", "nacked")
+			ct.observability.RecordPublishMetrics("rabbitmq", "", confirmDuration, false, "nacked")
+		}
 		err = messaging.NewError(messaging.ErrorCodePublish, "confirm_nack", "message was nacked by broker")
-		ct.observability.RecordPublishMetrics("rabbitmq", "", confirmDuration, false, "nacked")
 		receiptMgr.CompleteReceipt("", result, err)
 	}
 }
@@ -156,44 +202,57 @@ func (ct *ConfirmTracker) processReturn(returnMsg amqp091.Return) {
 	if exists {
 		delete(ct.deliveryTags, messageID)
 	}
-	receiptMgr, receiptExists := ct.receipts[deliveryTag]
-	publishTime, timeExists := ct.publishTimes[deliveryTag]
-	if receiptExists {
-		delete(ct.receipts, deliveryTag)
-	}
-	if timeExists {
-		delete(ct.publishTimes, deliveryTag)
+
+	// Only process if we have a valid delivery tag
+	var receiptMgr *messaging.ReceiptManager
+	var publishTime time.Time
+	var receiptExists, timeExists bool
+
+	if deliveryTag > 0 {
+		receiptMgr, receiptExists = ct.receipts[deliveryTag]
+		publishTime, timeExists = ct.publishTimes[deliveryTag]
+		if receiptExists {
+			delete(ct.receipts, deliveryTag)
+		}
+		if timeExists {
+			delete(ct.publishTimes, deliveryTag)
+		}
 	}
 	ct.mu.Unlock()
 
-	if !exists || !receiptExists {
-		ct.observability.Logger().Warn("received return for unknown message",
-			logx.String("message_id", messageID),
-			logx.Int64("delivery_tag", int64(deliveryTag)),
-			logx.Int("reply_code", int(returnMsg.ReplyCode)),
-			logx.String("reply_text", returnMsg.ReplyText))
+	if !exists || !receiptExists || deliveryTag == 0 {
+		if ct.observability != nil {
+			ct.observability.Logger().Warn("received return for unknown message",
+				logx.String("message_id", messageID),
+				logx.Int64("delivery_tag", int64(deliveryTag)),
+				logx.Int("reply_code", int(returnMsg.ReplyCode)),
+				logx.String("reply_text", returnMsg.ReplyText))
+		}
 		return
 	}
-
-	// Record return metrics
-	ct.observability.Metrics().ReturnTotal("rabbitmq")
 
 	// Calculate return duration
 	var returnDuration time.Duration
 	if timeExists {
 		returnDuration = time.Since(publishTime)
-		ct.observability.Metrics().ReturnDuration("rabbitmq", returnDuration)
 	}
 
-	ct.observability.RecordPublishMetrics("rabbitmq", returnMsg.Exchange, returnDuration, false, "returned")
-	ct.observability.Logger().Warn("message returned as unroutable",
-		logx.String("message_id", messageID),
-		logx.String("exchange", returnMsg.Exchange),
-		logx.String("routing_key", returnMsg.RoutingKey),
-		logx.Int("reply_code", int(returnMsg.ReplyCode)),
-		logx.String("reply_text", returnMsg.ReplyText))
+	// Record return metrics if observability is available
+	if ct.observability != nil {
+		ct.observability.Metrics().ReturnTotal("rabbitmq")
+		if timeExists {
+			ct.observability.Metrics().ReturnDuration("rabbitmq", returnDuration)
+		}
+		ct.observability.RecordPublishMetrics("rabbitmq", returnMsg.Exchange, returnDuration, false, "returned")
+		ct.observability.Logger().Warn("message returned as unroutable",
+			logx.String("message_id", messageID),
+			logx.String("exchange", returnMsg.Exchange),
+			logx.String("routing_key", returnMsg.RoutingKey),
+			logx.Int("reply_code", int(returnMsg.ReplyCode)),
+			logx.String("reply_text", returnMsg.ReplyText))
+	}
 
-	// Complete the receipt with an error
+	// Complete the receipt with an error (always complete regardless of observability)
 	result := messaging.PublishResult{
 		DeliveryTag: deliveryTag,
 		Timestamp:   time.Now(),
@@ -215,15 +274,17 @@ func (ct *ConfirmTracker) Close() error {
 	}
 	ct.closed = true
 
-	// Complete all pending receipts with an error
+	// Collect pending receipts to complete them after releasing the lock
+	pendingReceipts := make([]struct {
+		deliveryTag uint64
+		receiptMgr  *messaging.ReceiptManager
+	}, 0, len(ct.receipts))
+
 	for deliveryTag, receiptMgr := range ct.receipts {
-		err := messaging.NewError(messaging.ErrorCodePublish, "tracker_closed", "confirm tracker was closed")
-		receiptMgr.CompleteReceipt("", messaging.PublishResult{
-			DeliveryTag: deliveryTag,
-			Timestamp:   time.Now(),
-			Success:     false,
-			Reason:      "tracker closed",
-		}, err)
+		pendingReceipts = append(pendingReceipts, struct {
+			deliveryTag uint64
+			receiptMgr  *messaging.ReceiptManager
+		}{deliveryTag, receiptMgr})
 	}
 
 	// Clear maps
@@ -231,6 +292,17 @@ func (ct *ConfirmTracker) Close() error {
 	ct.deliveryTags = make(map[string]uint64)
 	ct.publishTimes = make(map[uint64]time.Time)
 	ct.mu.Unlock()
+
+	// Complete all pending receipts with an error (without holding the lock)
+	for _, pending := range pendingReceipts {
+		err := messaging.NewError(messaging.ErrorCodePublish, "tracker_closed", "confirm tracker was closed")
+		pending.receiptMgr.CompleteReceipt("", messaging.PublishResult{
+			DeliveryTag: pending.deliveryTag,
+			Timestamp:   time.Now(),
+			Success:     false,
+			Reason:      "tracker closed",
+		}, err)
+	}
 
 	// Close notification channels
 	close(ct.confirmChan)
@@ -264,6 +336,10 @@ func NewChannelConfirmManager() *ChannelConfirmManager {
 
 // GetOrCreateTracker gets or creates a confirm tracker for a channel.
 func (ccm *ChannelConfirmManager) GetOrCreateTracker(channel *amqp091.Channel, observability *messaging.ObservabilityContext) (*ConfirmTracker, error) {
+	if channel == nil {
+		return nil, messaging.NewError(messaging.ErrorCodeChannel, "nil_channel", "channel cannot be nil")
+	}
+
 	ccm.mu.Lock()
 	defer ccm.mu.Unlock()
 
@@ -282,15 +358,31 @@ func (ccm *ChannelConfirmManager) GetOrCreateTracker(channel *amqp091.Channel, o
 
 // RemoveTracker removes a tracker for a channel.
 func (ccm *ChannelConfirmManager) RemoveTracker(channel *amqp091.Channel) error {
-	ccm.mu.Lock()
-	defer ccm.mu.Unlock()
-
-	if tracker, exists := ccm.trackers[channel]; exists {
-		delete(ccm.trackers, channel)
-		return tracker.Close()
+	if channel == nil {
+		return messaging.NewError(messaging.ErrorCodeChannel, "nil_channel", "channel cannot be nil")
 	}
 
-	return nil
+	ccm.mu.Lock()
+	tracker, exists := ccm.trackers[channel]
+	if !exists {
+		ccm.mu.Unlock()
+		return nil
+	}
+
+	// Don't remove from map yet - only remove if Close() succeeds
+	ccm.mu.Unlock()
+
+	// Close the tracker
+	err := tracker.Close()
+
+	// Only remove from map if Close() succeeded
+	if err == nil {
+		ccm.mu.Lock()
+		delete(ccm.trackers, channel)
+		ccm.mu.Unlock()
+	}
+
+	return err
 }
 
 // Close closes all trackers.

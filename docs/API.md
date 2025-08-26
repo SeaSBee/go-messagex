@@ -53,19 +53,19 @@ func main() {
         },
     }
     
+    // Create transport factory
+    factory := &rabbitmq.TransportFactory{}
+    
     // Create publisher
-    publisher, err := rabbitmq.NewPublisher(context.Background(), config)
+    publisher, err := factory.NewPublisher(context.Background(), config)
     if err != nil {
         logx.Fatal("Failed to create publisher", logx.Error(err))
     }
     defer publisher.Close(context.Background())
     
     // Publish message
-    msg := messaging.NewMessage([]byte("Hello, World!"))
-    receipt, err := publisher.PublishAsync(context.Background(), "my.exchange", msg)
-    if err != nil {
-        logx.Fatal("Failed to publish message", logx.Error(err))
-    }
+    msg := messaging.NewMessage([]byte("Hello, World!"), messaging.WithKey("my.routing.key"))
+    receipt := publisher.PublishAsync(context.Background(), "my.exchange", *msg)
     
     // Wait for confirmation
     <-receipt.Done()
@@ -104,8 +104,11 @@ func main() {
         },
     }
     
+    // Create transport factory
+    factory := &rabbitmq.TransportFactory{}
+    
     // Create consumer
-    consumer, err := rabbitmq.NewConsumer(context.Background(), config)
+    consumer, err := factory.NewConsumer(context.Background(), config)
     if err != nil {
         logx.Fatal("Failed to create consumer", logx.Error(err))
     }

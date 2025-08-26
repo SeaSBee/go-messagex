@@ -3,6 +3,8 @@ package messaging
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 )
 
@@ -41,6 +43,9 @@ type HandlerFunc func(ctx context.Context, msg Delivery) (AckDecision, error)
 
 // Process implements the Handler interface.
 func (f HandlerFunc) Process(ctx context.Context, msg Delivery) (AckDecision, error) {
+	if f == nil {
+		return NackRequeue, errors.New("handler function is nil")
+	}
 	return f(ctx, msg)
 }
 
@@ -123,6 +128,7 @@ func (d AckDecision) String() string {
 
 // TransportRegistry manages registered transport factories.
 type TransportRegistry struct {
+	mu        sync.RWMutex
 	factories map[string]TransportFactory
 }
 
@@ -135,17 +141,31 @@ func NewTransportRegistry() *TransportRegistry {
 
 // Register registers a transport factory with the given name.
 func (r *TransportRegistry) Register(name string, factory TransportFactory) {
+	if name == "" {
+		panic("transport name cannot be empty")
+	}
+	if factory == nil {
+		panic("transport factory cannot be nil")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.factories[name] = factory
 }
 
 // Get returns the transport factory for the given name.
 func (r *TransportRegistry) Get(name string) (TransportFactory, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	factory, exists := r.factories[name]
 	return factory, exists
 }
 
 // List returns all registered transport names.
 func (r *TransportRegistry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	names := make([]string, 0, len(r.factories))
 	for name := range r.factories {
 		names = append(names, name)
@@ -154,20 +174,40 @@ func (r *TransportRegistry) List() []string {
 }
 
 // Default transport registry instance.
-var DefaultRegistry = NewTransportRegistry()
+var (
+	defaultRegistryOnce sync.Once
+	defaultRegistry     *TransportRegistry
+)
+
+func getDefaultRegistry() *TransportRegistry {
+	defaultRegistryOnce.Do(func() {
+		defaultRegistry = NewTransportRegistry()
+	})
+	return defaultRegistry
+}
 
 // RegisterTransport registers a transport factory in the default registry.
 func RegisterTransport(name string, factory TransportFactory) {
-	DefaultRegistry.Register(name, factory)
+	getDefaultRegistry().Register(name, factory)
 }
 
 // GetTransport returns a transport factory from the default registry.
 func GetTransport(name string) (TransportFactory, bool) {
-	return DefaultRegistry.Get(name)
+	if name == "" {
+		return nil, false
+	}
+	return getDefaultRegistry().Get(name)
 }
 
 // NewPublisher creates a new publisher using the default registry.
 func NewPublisher(ctx context.Context, cfg *Config) (Publisher, error) {
+	if cfg == nil {
+		return nil, errors.New("config cannot be nil")
+	}
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+
 	factory, exists := GetTransport(cfg.Transport)
 	if !exists {
 		return nil, ErrUnsupportedTransport
@@ -177,6 +217,13 @@ func NewPublisher(ctx context.Context, cfg *Config) (Publisher, error) {
 
 // NewConsumer creates a new consumer using the default registry.
 func NewConsumer(ctx context.Context, cfg *Config) (Consumer, error) {
+	if cfg == nil {
+		return nil, errors.New("config cannot be nil")
+	}
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+
 	factory, exists := GetTransport(cfg.Transport)
 	if !exists {
 		return nil, ErrUnsupportedTransport

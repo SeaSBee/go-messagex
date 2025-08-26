@@ -31,6 +31,17 @@ type AdvancedPublisher struct {
 
 // NewAdvancedPublisher creates a new advanced publisher.
 func NewAdvancedPublisher(transport *Transport, config *messaging.PublisherConfig, observability *messaging.ObservabilityContext) *AdvancedPublisher {
+	// Validate required parameters
+	if transport == nil {
+		panic("transport cannot be nil")
+	}
+	if config == nil {
+		panic("config cannot be nil")
+	}
+	if observability == nil {
+		panic("observability cannot be nil")
+	}
+
 	receiptTimeout := config.PublishTimeout
 	if receiptTimeout == 0 {
 		receiptTimeout = 30 * time.Second
@@ -75,8 +86,18 @@ func (ap *AdvancedPublisher) PublishAsync(ctx context.Context, topic string, msg
 		return nil, messaging.NewError(messaging.ErrorCodePublish, "publish_async", "publisher is closed")
 	}
 
+	// Check if transport is nil
+	if ap.transport == nil {
+		return nil, messaging.NewError(messaging.ErrorCodeConnection, "publish_async", "transport is nil")
+	}
+
 	if !ap.transport.IsConnected() {
 		return nil, messaging.NewError(messaging.ErrorCodeConnection, "publish_async", "transport is not connected")
+	}
+
+	// Validate message ID
+	if msg.ID == "" {
+		msg.ID = GenerateMessageID()
 	}
 
 	// Apply message transformation if configured
@@ -227,19 +248,25 @@ func (ap *AdvancedPublisher) Close(ctx context.Context) error {
 		ap.receiptManager.Close()
 	}
 
-	// Close persistence if configured
+	// Close persistence if configured with timeout
 	if ap.persistence != nil {
-		ap.persistence.Close(ctx)
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		ap.persistence.Close(closeCtx)
 	}
 
-	// Close transformation if configured
+	// Close transformation if configured with timeout
 	if ap.transformation != nil {
-		ap.transformation.Close(ctx)
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		ap.transformation.Close(closeCtx)
 	}
 
-	// Close routing if configured
+	// Close routing if configured with timeout
 	if ap.routing != nil {
-		ap.routing.Close(ctx)
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		ap.routing.Close(closeCtx)
 	}
 
 	return nil
@@ -261,6 +288,17 @@ type AdvancedConsumer struct {
 
 // NewAdvancedConsumer creates a new advanced consumer.
 func NewAdvancedConsumer(transport *Transport, config *messaging.ConsumerConfig, observability *messaging.ObservabilityContext) *AdvancedConsumer {
+	// Validate required parameters
+	if transport == nil {
+		panic("transport cannot be nil")
+	}
+	if config == nil {
+		panic("config cannot be nil")
+	}
+	if observability == nil {
+		panic("observability cannot be nil")
+	}
+
 	return &AdvancedConsumer{
 		transport:     transport,
 		config:        config,
@@ -302,12 +340,28 @@ func (ac *AdvancedConsumer) Start(ctx context.Context, handler messaging.Handler
 		return messaging.NewError(messaging.ErrorCodeConsume, "start", "consumer is already started")
 	}
 
+	// Validate handler parameter
+	if handler == nil {
+		return messaging.NewError(messaging.ErrorCodeConsume, "start", "handler cannot be nil")
+	}
+
+	// Check if transport is nil
+	if ac.transport == nil {
+		return messaging.NewError(messaging.ErrorCodeConnection, "start", "transport is nil")
+	}
+
 	if !ac.transport.IsConnected() {
 		return messaging.NewError(messaging.ErrorCodeConnection, "start", "transport is not connected")
 	}
 
+	// Get channel and validate
+	channel := ac.transport.GetChannel()
+	if channel == nil {
+		return messaging.NewError(messaging.ErrorCodeChannel, "start", "failed to get channel")
+	}
+
 	// Start consuming
-	deliveries, err := ac.transport.GetChannel().Consume(
+	deliveries, err := channel.Consume(
 		ac.config.Queue,     // queue
 		"",                  // consumer
 		ac.config.AutoAck,   // auto-ack
@@ -341,19 +395,25 @@ func (ac *AdvancedConsumer) Stop(ctx context.Context) error {
 	ac.started = false
 	ac.closed = true
 
-	// Close DLQ if configured
+	// Close DLQ if configured with timeout
 	if ac.dlq != nil {
-		ac.dlq.Close(ctx)
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		ac.dlq.Close(closeCtx)
 	}
 
-	// Close transformation if configured
+	// Close transformation if configured with timeout
 	if ac.transformation != nil {
-		ac.transformation.Close(ctx)
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		ac.transformation.Close(closeCtx)
 	}
 
-	// Close routing if configured
+	// Close routing if configured with timeout
 	if ac.routing != nil {
-		ac.routing.Close(ctx)
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		ac.routing.Close(closeCtx)
 	}
 
 	return nil
@@ -361,11 +421,26 @@ func (ac *AdvancedConsumer) Stop(ctx context.Context) error {
 
 // processMessages processes messages with advanced features.
 func (ac *AdvancedConsumer) processMessages(ctx context.Context, handler messaging.Handler) {
+	// Validate handler parameter
+	if handler == nil {
+		ac.observability.Logger().Error("handler cannot be nil in processMessages")
+		return
+	}
+
+	// Get a local copy of the deliveries channel to avoid race conditions
+	ac.mu.RLock()
+	deliveries := ac.deliveries
+	ac.mu.RUnlock()
+
+	if deliveries == nil {
+		return
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case delivery, ok := <-ac.deliveries:
+		case delivery, ok := <-deliveries:
 			if !ok {
 				return
 			}
@@ -376,6 +451,12 @@ func (ac *AdvancedConsumer) processMessages(ctx context.Context, handler messagi
 
 // handleMessage handles a single message with advanced features.
 func (ac *AdvancedConsumer) handleMessage(ctx context.Context, amqpDelivery amqp091.Delivery, handler messaging.Handler) {
+	// Validate handler parameter
+	if handler == nil {
+		ac.observability.Logger().Error("handler cannot be nil in handleMessage")
+		return
+	}
+
 	// Convert AMQP delivery to messaging delivery
 	delivery := messaging.Delivery{
 		Message: messaging.Message{
@@ -394,12 +475,24 @@ func (ac *AdvancedConsumer) handleMessage(ctx context.Context, amqpDelivery amqp
 		ConsumerTag: amqpDelivery.ConsumerTag,
 	}
 
-	// Extract custom headers
+	// Extract custom headers with proper type handling
 	if amqpDelivery.Headers != nil {
 		delivery.Message.Headers = make(map[string]string)
 		for k, v := range amqpDelivery.Headers {
-			if str, ok := v.(string); ok {
-				delivery.Message.Headers[k] = str
+			switch val := v.(type) {
+			case string:
+				delivery.Message.Headers[k] = val
+			case []byte:
+				delivery.Message.Headers[k] = string(val)
+			case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+				delivery.Message.Headers[k] = fmt.Sprintf("%v", val)
+			case float32, float64:
+				delivery.Message.Headers[k] = fmt.Sprintf("%v", val)
+			case bool:
+				delivery.Message.Headers[k] = fmt.Sprintf("%t", val)
+			default:
+				// Convert other types to string representation
+				delivery.Message.Headers[k] = fmt.Sprintf("%v", val)
 			}
 		}
 	}
@@ -435,25 +528,33 @@ func (ac *AdvancedConsumer) handleMessage(ctx context.Context, amqpDelivery amqp
 	// Handle acknowledgment
 	if err != nil {
 		if ac.dlq != nil && ac.config.MaxRetries > 0 {
-			// Check retry count
+			// Check retry count with safe header access
 			retryCount := 0
-			if deliveryCount, ok := delivery.Message.Headers["x-retry-count"]; ok {
-				if count, err := fmt.Sscanf(deliveryCount, "%d", &retryCount); err == nil && count > 0 {
-					retryCount = count
+			if delivery.Message.Headers != nil {
+				if deliveryCount, ok := delivery.Message.Headers["x-retry-count"]; ok {
+					if count, parseErr := fmt.Sscanf(deliveryCount, "%d", &retryCount); parseErr == nil && count == 1 {
+						// Successfully parsed retry count
+					} else {
+						// Reset to 0 if parsing failed
+						retryCount = 0
+					}
 				}
 			}
 
 			if retryCount >= ac.config.MaxRetries {
 				// Send to DLQ
-				err := ac.dlq.SendToDLQ(ctx, &delivery.Message, err.Error())
-				if err != nil {
+				dlqErr := ac.dlq.SendToDLQ(ctx, &delivery.Message, err.Error())
+				if dlqErr != nil {
 					ac.observability.RecordDLQMetrics("send", 0, false, "dlq_failed")
 				} else {
 					ac.observability.RecordDLQMetrics("send", 0, true, "")
 				}
 				amqpDelivery.Ack(false) // Acknowledge to remove from queue
 			} else {
-				// Increment retry count and requeue
+				// Ensure headers map exists before setting retry count
+				if delivery.Message.Headers == nil {
+					delivery.Message.Headers = make(map[string]string)
+				}
 				delivery.Message.Headers["x-retry-count"] = fmt.Sprintf("%d", retryCount+1)
 				amqpDelivery.Nack(false, true) // Requeue
 			}
@@ -470,8 +571,8 @@ func (ac *AdvancedConsumer) handleMessage(ctx context.Context, amqpDelivery amqp
 			amqpDelivery.Nack(false, true) // Requeue
 		case messaging.NackDLQ:
 			if ac.dlq != nil {
-				err := ac.dlq.SendToDLQ(ctx, &delivery.Message, "explicit DLQ routing")
-				if err != nil {
+				dlqErr := ac.dlq.SendToDLQ(ctx, &delivery.Message, "explicit DLQ routing")
+				if dlqErr != nil {
 					ac.observability.RecordDLQMetrics("send", 0, false, "dlq_failed")
 				} else {
 					ac.observability.RecordDLQMetrics("send", 0, true, "")
@@ -490,6 +591,12 @@ func GenerateMessageID() string {
 
 // GenerateIdempotencyKey generates an idempotency key for a message.
 func GenerateIdempotencyKey(message *messaging.Message) string {
+	if message == nil {
+		// Generate a fallback idempotency key if message is nil
+		hash := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
+		return hex.EncodeToString(hash[:])
+	}
+
 	data := fmt.Sprintf("%s:%s:%s", message.ID, message.Key, string(message.Body))
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:])

@@ -4,6 +4,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,14 +31,70 @@ type TestConfig struct {
 	EnableTracing bool
 }
 
+// Validate validates the test configuration.
+func (tc *TestConfig) Validate() error {
+	if tc.FailureRate < 0 || tc.FailureRate > 1 || math.IsNaN(tc.FailureRate) || math.IsInf(tc.FailureRate, 0) {
+		return NewError(ErrorCodeConfiguration, "validate", "failure rate must be between 0.0 and 1.0")
+	}
+	if tc.Latency < 0 {
+		return NewError(ErrorCodeConfiguration, "validate", "latency cannot be negative")
+	}
+	return nil
+}
+
+// GetObservabilityContext safely returns the observability context, creating a default one if nil.
+func (tc *TestConfig) GetObservabilityContext(ctx context.Context) *ObservabilityContext {
+	if tc.Observability != nil {
+		return tc.Observability
+	}
+
+	// Create a minimal observability context if none exists
+	obsProvider, _ := NewObservabilityProvider(&TelemetryConfig{
+		MetricsEnabled: tc.EnableMetrics,
+		TracingEnabled: tc.EnableTracing,
+	})
+
+	if obsProvider != nil {
+		return NewObservabilityContext(ctx, obsProvider)
+	}
+
+	// Return a minimal context if provider creation fails
+	return NewObservabilityContext(ctx, nil)
+}
+
 // NewTestConfig creates a new test configuration.
 func NewTestConfig() *TestConfig {
-	obsProvider, _ := NewObservabilityProvider(&TelemetryConfig{
+	obsProvider, err := NewObservabilityProvider(&TelemetryConfig{
 		MetricsEnabled: true,
 		TracingEnabled: true,
 	})
 
-	return &TestConfig{
+	// If observability provider creation fails, create a minimal config
+	if err != nil || obsProvider == nil {
+		config := &TestConfig{
+			Transport:     "test",
+			Observability: nil, // Will be handled gracefully in usage
+			FailureRate:   0.0,
+			Latency:       0,
+			EnableMetrics: false,
+			EnableTracing: false,
+		}
+		// Validate the config
+		if validateErr := config.Validate(); validateErr != nil {
+			// Return a safe default if validation fails
+			return &TestConfig{
+				Transport:     "test",
+				Observability: nil,
+				FailureRate:   0.0,
+				Latency:       0,
+				EnableMetrics: false,
+				EnableTracing: false,
+			}
+		}
+		return config
+	}
+
+	config := &TestConfig{
 		Transport:     "test",
 		Observability: NewObservabilityContext(context.Background(), obsProvider),
 		FailureRate:   0.0,
@@ -45,6 +102,21 @@ func NewTestConfig() *TestConfig {
 		EnableMetrics: true,
 		EnableTracing: true,
 	}
+
+	// Validate the config
+	if validateErr := config.Validate(); validateErr != nil {
+		// Return a safe default if validation fails
+		return &TestConfig{
+			Transport:     "test",
+			Observability: NewObservabilityContext(context.Background(), obsProvider),
+			FailureRate:   0.0,
+			Latency:       0,
+			EnableMetrics: true,
+			EnableTracing: true,
+		}
+	}
+
+	return config
 }
 
 // TestMessageFactory provides utilities for creating test messages.
@@ -66,22 +138,33 @@ func (tmf *TestMessageFactory) CreateMessage(body []byte, options ...MessageOpti
 		WithID(fmt.Sprintf("test-msg-%d", id)),
 		WithContentType("application/json"),
 		WithTimestamp(time.Now()),
+		WithKey("test.key"), // Add default routing key for tests
 	}
 
 	// Combine with provided options
 	allOptions := append(defaultOptions, options...)
 
-	return NewMessage(body, allOptions...)
+	msg := NewMessage(body, allOptions...)
+	return *msg
 }
 
 // CreateJSONMessage creates a test message with JSON body.
 func (tmf *TestMessageFactory) CreateJSONMessage(data interface{}, options ...MessageOption) Message {
+	// Handle nil data gracefully
+	if data == nil {
+		data = "null"
+	}
+
 	body := []byte(fmt.Sprintf(`{"test": %v, "timestamp": "%s"}`, data, time.Now().Format(time.RFC3339)))
 	return tmf.CreateMessage(body, options...)
 }
 
 // CreateBulkMessages creates multiple test messages.
 func (tmf *TestMessageFactory) CreateBulkMessages(count int, bodyTemplate string, options ...MessageOption) []Message {
+	if count <= 0 {
+		return []Message{}
+	}
+
 	messages := make([]Message, count)
 	for i := 0; i < count; i++ {
 		body := []byte(fmt.Sprintf(bodyTemplate, i))
@@ -105,6 +188,11 @@ type MockTransport struct {
 
 // NewMockTransport creates a new mock transport.
 func NewMockTransport(config *TestConfig) *MockTransport {
+	// Use default config if nil is provided
+	if config == nil {
+		config = NewTestConfig()
+	}
+
 	return &MockTransport{
 		config:     config,
 		publishers: make(map[string]*MockPublisher),
@@ -119,6 +207,11 @@ func (mt *MockTransport) NewPublisher(config *PublisherConfig, observability *Ob
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
+	// Use safe observability context if provided one is nil
+	if observability == nil {
+		observability = mt.config.GetObservabilityContext(context.Background())
+	}
+
 	id := fmt.Sprintf("publisher-%d", len(mt.publishers))
 	publisher := NewMockPublisher(id, mt.config, mt)
 	mt.publishers[id] = publisher
@@ -129,6 +222,11 @@ func (mt *MockTransport) NewPublisher(config *PublisherConfig, observability *Ob
 func (mt *MockTransport) NewConsumer(config *ConsumerConfig, observability *ObservabilityContext) Consumer {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
+
+	// Use safe observability context if provided one is nil
+	if observability == nil {
+		observability = mt.config.GetObservabilityContext(context.Background())
+	}
 
 	id := fmt.Sprintf("consumer-%d", len(mt.consumers))
 	consumer := NewMockConsumer(id, mt.config, mt)
@@ -146,9 +244,13 @@ func (mt *MockTransport) Connect(ctx context.Context) error {
 		return NewError(ErrorCodeConnection, "connect", "simulated connection failure")
 	}
 
-	// Simulate connection latency
+	// Simulate connection latency with context awareness
 	if mt.config.Latency > 0 {
-		time.Sleep(mt.config.Latency)
+		select {
+		case <-time.After(mt.config.Latency):
+		case <-ctx.Done():
+			return NewError(ErrorCodeTimeout, "connect", "connection timeout")
+		}
 	}
 
 	mt.connected = true
@@ -161,6 +263,34 @@ func (mt *MockTransport) Disconnect(ctx context.Context) error {
 	defer mt.mu.Unlock()
 
 	mt.connected = false
+	return nil
+}
+
+// Cleanup cleans up all resources and closes all publishers and consumers.
+func (mt *MockTransport) Cleanup(ctx context.Context) error {
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+
+	// Close all publishers
+	for _, publisher := range mt.publishers {
+		if publisher != nil {
+			publisher.Close(ctx)
+		}
+	}
+
+	// Close all consumers
+	for _, consumer := range mt.consumers {
+		if consumer != nil {
+			consumer.Close(ctx)
+		}
+	}
+
+	// Clear maps to prevent memory leaks
+	mt.publishers = make(map[string]*MockPublisher)
+	mt.consumers = make(map[string]*MockConsumer)
+	mt.topology = make(map[string]interface{})
+	mt.connected = false
+
 	return nil
 }
 
@@ -224,11 +354,28 @@ func (mp *MockPublisher) PublishAsync(ctx context.Context, topic string, msg Mes
 	receipt := NewMockReceipt(msg.ID, mp.config)
 	mp.receipts[msg.ID] = receipt
 
-	// Simulate async processing
+	// Simulate async processing with context cancellation
 	go func() {
-		// Simulate processing latency
+		// Create a context with timeout for processing
+		processCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Simulate processing latency with context awareness
 		if mp.config.Latency > 0 {
-			time.Sleep(mp.config.Latency)
+			select {
+			case <-time.After(mp.config.Latency):
+			case <-processCtx.Done():
+				receipt.Complete(PublishResult{}, NewError(ErrorCodePublish, "publish_async", "processing timeout"))
+				return
+			}
+		}
+
+		// Check if the original context was cancelled
+		select {
+		case <-ctx.Done():
+			receipt.Complete(PublishResult{}, NewError(ErrorCodePublish, "publish_async", "context cancelled"))
+			return
+		default:
 		}
 
 		// Complete the receipt
@@ -330,14 +477,22 @@ func (mc *MockConsumer) SimulateMessage(msg Message) error {
 	// Create delivery
 	delivery := NewMockDelivery(msg, mc.config)
 
-	// Process message
+	// Process message with context cancellation support
 	go func() {
-		// Simulate processing latency
+		// Create a context with timeout for processing
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Simulate processing latency with context awareness
 		if mc.config.Latency > 0 {
-			time.Sleep(mc.config.Latency)
+			select {
+			case <-time.After(mc.config.Latency):
+			case <-ctx.Done():
+				return
+			}
 		}
 
-		decision, err := handler.Process(context.Background(), delivery.Delivery)
+		decision, err := handler.Process(ctx, delivery.Delivery)
 		if err != nil {
 			atomic.AddUint64(&mc.transport.errorCount, 1)
 		} else {
@@ -377,31 +532,48 @@ func (mc *MockConsumer) consumeLoop(ctx context.Context) {
 				return
 			}
 
-			// Simulate receiving a message
-			msg := factory.CreateJSONMessage("test-data")
-			mc.SimulateMessage(msg)
+			// Simulate receiving a message with context awareness
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				msg := factory.CreateJSONMessage("test-data")
+				// Use a separate goroutine to avoid blocking the consume loop
+				go func() {
+					if err := mc.SimulateMessage(msg); err != nil {
+						// Log error but don't stop the loop
+						atomic.AddUint64(&mc.transport.errorCount, 1)
+					}
+				}()
+			}
 		}
 	}
 }
 
 // MockReceipt provides a mock receipt for testing.
 type MockReceipt struct {
-	id     string
-	ctx    context.Context
-	done   chan struct{}
-	result PublishResult
-	err    error
-	config *TestConfig
-	mu     sync.RWMutex
+	id      string
+	ctx     context.Context
+	done    chan struct{}
+	result  PublishResult
+	err     error
+	config  *TestConfig
+	mu      sync.RWMutex
+	_cancel context.CancelFunc
 }
 
 // NewMockReceipt creates a new mock receipt.
 func NewMockReceipt(id string, config *TestConfig) *MockReceipt {
+	// Create a cancellable context with timeout to prevent goroutine leaks
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+
 	return &MockReceipt{
 		id:     id,
-		ctx:    context.Background(),
+		ctx:    ctx,
 		done:   make(chan struct{}),
 		config: config,
+		// Store cancel function for cleanup (though not exposed in interface)
+		_cancel: cancel,
 	}
 }
 
@@ -432,9 +604,26 @@ func (mr *MockReceipt) Complete(result PublishResult, err error) {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
 
+	// Prevent double completion
+	if mr.result.MessageID != "" || mr.err != nil {
+		return
+	}
+
 	mr.result = result
 	mr.err = err
 	close(mr.done)
+
+	// Cancel the context to prevent goroutine leaks
+	if mr._cancel != nil {
+		mr._cancel()
+	}
+}
+
+// IsCompleted returns whether the receipt has been completed.
+func (mr *MockReceipt) IsCompleted() bool {
+	mr.mu.RLock()
+	defer mr.mu.RUnlock()
+	return mr.result.MessageID != "" || mr.err != nil
 }
 
 // MockDelivery provides a mock delivery for testing.
@@ -514,7 +703,8 @@ func (md *MockDelivery) IsRejected() bool {
 
 // shouldFail determines if an operation should fail based on failure rate.
 func shouldFail(rate float64) bool {
-	if rate <= 0 {
+	// Handle edge cases
+	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
 		return false
 	}
 	if rate >= 1 {
@@ -532,6 +722,11 @@ type TestRunner struct {
 
 // NewTestRunner creates a new test runner.
 func NewTestRunner(config *TestConfig) *TestRunner {
+	// Use default config if nil is provided
+	if config == nil {
+		config = NewTestConfig()
+	}
+
 	return &TestRunner{
 		config:  config,
 		factory: NewTestMessageFactory(),
@@ -540,6 +735,20 @@ func NewTestRunner(config *TestConfig) *TestRunner {
 
 // RunPublishTest runs a publish test scenario.
 func (tr *TestRunner) RunPublishTest(ctx context.Context, publisher Publisher, messageCount int) (*TestResult, error) {
+	if publisher == nil {
+		return nil, NewError(ErrorCodePublish, "run_publish_test", "publisher is nil")
+	}
+
+	if messageCount <= 0 {
+		return &TestResult{
+			Duration:     0,
+			MessageCount: 0,
+			SuccessCount: 0,
+			ErrorCount:   0,
+			Throughput:   0,
+		}, nil
+	}
+
 	start := time.Now()
 	var successCount, errorCount uint64
 
@@ -551,6 +760,10 @@ func (tr *TestRunner) RunPublishTest(ctx context.Context, publisher Publisher, m
 	for i, msg := range messages {
 		receipt, err := publisher.PublishAsync(ctx, "test.exchange", msg)
 		if err != nil {
+			atomic.AddUint64(&errorCount, 1)
+			continue
+		}
+		if receipt == nil {
 			atomic.AddUint64(&errorCount, 1)
 			continue
 		}
@@ -578,12 +791,18 @@ func (tr *TestRunner) RunPublishTest(ctx context.Context, publisher Publisher, m
 
 	duration := time.Since(start)
 
+	// Calculate throughput safely to avoid division by zero
+	var throughput float64
+	if duration > 0 {
+		throughput = float64(successCount) / duration.Seconds()
+	}
+
 	return &TestResult{
 		Duration:     duration,
 		MessageCount: uint64(messageCount),
 		SuccessCount: successCount,
 		ErrorCount:   errorCount,
-		Throughput:   float64(successCount) / duration.Seconds(),
+		Throughput:   throughput,
 	}, nil
 }
 

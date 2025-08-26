@@ -3,10 +3,39 @@ package messaging
 
 import (
 	"context"
+	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+// Performance-related constants
+const (
+	// DefaultBatchSize is the default batch size for operations
+	DefaultBatchSize = 100
+
+	// DefaultBatchTimeout is the default timeout for batch operations
+	DefaultBatchTimeout = 100 * time.Millisecond
+
+	// DefaultObjectPoolSize is the default size for object pools
+	DefaultObjectPoolSize = 100
+
+	// DefaultMemoryLimit is the default memory limit in bytes (1GB)
+	DefaultMemoryLimit = 1073741824
+
+	// DefaultPerformanceMetricsInterval is the default interval for collecting performance metrics
+	DefaultPerformanceMetricsInterval = 10 * time.Second
+
+	// LatencyHistogramBuckets is the number of buckets for latency tracking
+	LatencyHistogramBuckets = 1000
+
+	// LatencyHistogramScalingFactor is the scaling factor for logarithmic bucket mapping
+	// 1000 buckets / 9 decades (1ns to 1s) ≈ 111.11
+	LatencyHistogramScalingFactor = 111.11
+
+	// LatencyHistogramMaxDecades is the maximum number of decades for latency range
+	LatencyHistogramMaxDecades = 9.0
 )
 
 // PerformanceConfig defines performance-related configuration.
@@ -99,19 +128,33 @@ type PerformanceMonitor struct {
 	// Memory tracking
 	lastGCStats runtime.MemStats
 	lastGC      uint32
+
+	// Goroutine management
+	stopChan chan struct{}
+	wg       sync.WaitGroup
 }
 
 // NewPerformanceMonitor creates a new performance monitor.
 func NewPerformanceMonitor(config *PerformanceConfig, observability *ObservabilityContext) *PerformanceMonitor {
+	// Validate input parameters
+	if config == nil {
+		config = &PerformanceConfig{
+			PerformanceMetricsInterval: DefaultPerformanceMetricsInterval,
+			MemoryLimit:                DefaultMemoryLimit,
+		}
+	}
+
 	pm := &PerformanceMonitor{
 		config:         config,
 		observability:  observability,
 		publishLatency: NewLatencyHistogram(),
 		consumeLatency: NewLatencyHistogram(),
+		stopChan:       make(chan struct{}),
 	}
 
 	// Start metrics collection if enabled
 	if config.PerformanceMetricsInterval > 0 {
+		pm.wg.Add(1)
 		go pm.collectMetrics()
 	}
 
@@ -120,6 +163,10 @@ func NewPerformanceMonitor(config *PerformanceConfig, observability *Observabili
 
 // RecordPublish records a publish operation.
 func (pm *PerformanceMonitor) RecordPublish(duration time.Duration, success bool) {
+	if pm == nil {
+		return
+	}
+
 	atomic.AddUint64(&pm.publishCount, 1)
 	pm.publishLatency.Record(duration.Nanoseconds())
 
@@ -130,6 +177,10 @@ func (pm *PerformanceMonitor) RecordPublish(duration time.Duration, success bool
 
 // RecordConsume records a consume operation.
 func (pm *PerformanceMonitor) RecordConsume(duration time.Duration, success bool) {
+	if pm == nil {
+		return
+	}
+
 	atomic.AddUint64(&pm.consumeCount, 1)
 	pm.consumeLatency.Record(duration.Nanoseconds())
 
@@ -140,6 +191,10 @@ func (pm *PerformanceMonitor) RecordConsume(duration time.Duration, success bool
 
 // GetMetrics returns the current performance metrics.
 func (pm *PerformanceMonitor) GetMetrics() *PerformanceMetrics {
+	if pm == nil {
+		return nil
+	}
+
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 
@@ -148,15 +203,21 @@ func (pm *PerformanceMonitor) GetMetrics() *PerformanceMetrics {
 
 // collectMetrics collects performance metrics periodically.
 func (pm *PerformanceMonitor) collectMetrics() {
+	defer pm.wg.Done()
+
 	ticker := time.NewTicker(pm.config.PerformanceMetricsInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if pm.closed {
+	for {
+		select {
+		case <-ticker.C:
+			if pm.closed {
+				return
+			}
+			pm.updateMetrics()
+		case <-pm.stopChan:
 			return
 		}
-
-		pm.updateMetrics()
 	}
 }
 
@@ -169,8 +230,12 @@ func (pm *PerformanceMonitor) updateMetrics() {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	// Calculate throughput
-	interval := float64(pm.config.PerformanceMetricsInterval.Seconds())
+	// Calculate throughput with protection against division by zero
+	interval := pm.config.PerformanceMetricsInterval.Seconds()
+	if interval <= 0 {
+		interval = 1.0 // Default to 1 second to avoid division by zero
+	}
+
 	publishCount := atomic.LoadUint64(&pm.publishCount)
 	consumeCount := atomic.LoadUint64(&pm.consumeCount)
 	errorCount := atomic.LoadUint64(&pm.errorCount)
@@ -188,8 +253,11 @@ func (pm *PerformanceMonitor) updateMetrics() {
 	consumeP95 := pm.consumeLatency.Percentile(95)
 	consumeP99 := pm.consumeLatency.Percentile(99)
 
-	// Calculate memory utilization
-	memoryUtilization := float64(memStats.HeapInuse) / float64(pm.config.MemoryLimit) * 100
+	// Calculate memory utilization with protection against division by zero
+	memoryUtilization := 0.0
+	if pm.config.MemoryLimit > 0 {
+		memoryUtilization = float64(memStats.HeapInuse) / float64(pm.config.MemoryLimit) * 100
+	}
 
 	// Calculate GC metrics
 	gcPauseDelta := memStats.PauseTotalNs - pm.lastGCStats.PauseTotalNs
@@ -229,16 +297,31 @@ func (pm *PerformanceMonitor) updateMetrics() {
 	atomic.StoreUint64(&pm.consumeCount, 0)
 	atomic.StoreUint64(&pm.errorCount, 0)
 
-	// Record metrics in observability
-	pm.observability.RecordPerformanceMetrics(pm.metrics)
+	// Record metrics in observability if available
+	if pm.observability != nil {
+		pm.observability.RecordPerformanceMetrics(pm.metrics)
+	}
 }
 
 // Close closes the performance monitor.
 func (pm *PerformanceMonitor) Close(ctx context.Context) error {
+	if pm == nil {
+		return nil
+	}
+
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
+	if pm.closed {
+		return nil
+	}
+
 	pm.closed = true
+	close(pm.stopChan)
+
+	// Wait for goroutines to finish
+	pm.wg.Wait()
+
 	return nil
 }
 
@@ -251,12 +334,16 @@ type LatencyHistogram struct {
 // NewLatencyHistogram creates a new latency histogram.
 func NewLatencyHistogram() *LatencyHistogram {
 	return &LatencyHistogram{
-		buckets: make([]uint64, 1000), // 1000 buckets for latency tracking
+		buckets: make([]uint64, LatencyHistogramBuckets),
 	}
 }
 
 // Record records a latency value.
 func (lh *LatencyHistogram) Record(latencyNs int64) {
+	if lh == nil {
+		return
+	}
+
 	lh.mu.Lock()
 	defer lh.mu.Unlock()
 
@@ -269,6 +356,10 @@ func (lh *LatencyHistogram) Record(latencyNs int64) {
 
 // Percentile calculates the percentile latency.
 func (lh *LatencyHistogram) Percentile(p float64) int64 {
+	if lh == nil {
+		return 0
+	}
+
 	lh.mu.RLock()
 	defer lh.mu.RUnlock()
 
@@ -300,14 +391,14 @@ func (lh *LatencyHistogram) latencyToBucket(latencyNs int64) int {
 		return 0
 	}
 
-	// Logarithmic scale: log10(latency_ns)
-	logLatency := float64(latencyNs)
-	if logLatency > 0 {
-		logLatency = float64(int64(logLatency))
-	}
+	// Proper logarithmic scale: log10(latency_ns)
+	logLatency := math.Log10(float64(latencyNs))
 
-	// Map to bucket (0-999)
-	bucket := int(logLatency / 1000.0) // Adjust scale as needed
+	// Map to bucket (0-999) with proper scaling
+	// Assuming latency range from 1ns to 1s (1e9 ns)
+	// log10(1) = 0, log10(1e9) = 9
+	bucket := int(logLatency * LatencyHistogramScalingFactor)
+
 	if bucket < 0 {
 		bucket = 0
 	}
@@ -321,7 +412,9 @@ func (lh *LatencyHistogram) latencyToBucket(latencyNs int64) int {
 // bucketToLatency converts bucket index to latency.
 func (lh *LatencyHistogram) bucketToLatency(bucket int) int64 {
 	// Reverse of latencyToBucket
-	latency := float64(bucket) * 1000.0
+	// bucket / LatencyHistogramScalingFactor gives us the log10 value
+	logLatency := float64(bucket) / LatencyHistogramScalingFactor
+	latency := math.Pow(10, logLatency)
 	return int64(latency)
 }
 
@@ -336,6 +429,14 @@ type ObjectPool struct {
 
 // NewObjectPool creates a new object pool.
 func NewObjectPool(size int, newFunc func() interface{}, resetFunc func(interface{})) *ObjectPool {
+	if size <= 0 {
+		size = DefaultObjectPoolSize
+	}
+
+	if newFunc == nil {
+		return nil // Cannot create pool without newFunc
+	}
+
 	return &ObjectPool{
 		pool:      make(chan interface{}, size),
 		newFunc:   newFunc,
@@ -345,6 +446,10 @@ func NewObjectPool(size int, newFunc func() interface{}, resetFunc func(interfac
 
 // Get gets an object from the pool.
 func (op *ObjectPool) Get() interface{} {
+	if op == nil || op.newFunc == nil {
+		return nil
+	}
+
 	op.mu.RLock()
 	defer op.mu.RUnlock()
 
@@ -362,10 +467,14 @@ func (op *ObjectPool) Get() interface{} {
 
 // Put puts an object back to the pool.
 func (op *ObjectPool) Put(obj interface{}) {
+	if op == nil || obj == nil {
+		return
+	}
+
 	op.mu.RLock()
 	defer op.mu.RUnlock()
 
-	if op.closed || obj == nil {
+	if op.closed {
 		return
 	}
 
@@ -383,8 +492,16 @@ func (op *ObjectPool) Put(obj interface{}) {
 
 // Close closes the object pool.
 func (op *ObjectPool) Close() {
+	if op == nil {
+		return
+	}
+
 	op.mu.Lock()
 	defer op.mu.Unlock()
+
+	if op.closed {
+		return
+	}
 
 	op.closed = true
 	close(op.pool)
@@ -399,10 +516,23 @@ type BatchProcessor struct {
 	mu           sync.Mutex
 	timer        *time.Timer
 	closed       bool
+	errorHandler func(error)
 }
 
 // NewBatchProcessor creates a new batch processor.
 func NewBatchProcessor(batchSize int, batchTimeout time.Duration, processor func([]interface{}) error) *BatchProcessor {
+	if batchSize <= 0 {
+		batchSize = DefaultBatchSize
+	}
+
+	if batchTimeout <= 0 {
+		batchTimeout = DefaultBatchTimeout
+	}
+
+	if processor == nil {
+		return nil // Cannot create processor without processor function
+	}
+
 	bp := &BatchProcessor{
 		batchSize:    batchSize,
 		batchTimeout: batchTimeout,
@@ -413,8 +543,19 @@ func NewBatchProcessor(batchSize int, batchTimeout time.Duration, processor func
 	return bp
 }
 
+// SetErrorHandler sets the error handler for batch processing errors.
+func (bp *BatchProcessor) SetErrorHandler(handler func(error)) {
+	if bp != nil {
+		bp.errorHandler = handler
+	}
+}
+
 // Add adds an item to the batch.
 func (bp *BatchProcessor) Add(item interface{}) error {
+	if bp == nil {
+		return NewError(ErrorCodeInternal, "batch_processor", "batch processor is nil")
+	}
+
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
@@ -439,6 +580,10 @@ func (bp *BatchProcessor) Add(item interface{}) error {
 
 // Flush flushes the current batch.
 func (bp *BatchProcessor) Flush() error {
+	if bp == nil {
+		return NewError(ErrorCodeInternal, "batch_processor", "batch processor is nil")
+	}
+
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
@@ -451,13 +596,22 @@ func (bp *BatchProcessor) Flush() error {
 
 // Close closes the batch processor.
 func (bp *BatchProcessor) Close() error {
+	if bp == nil {
+		return nil
+	}
+
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
+
+	if bp.closed {
+		return nil
+	}
 
 	bp.closed = true
 
 	if bp.timer != nil {
 		bp.timer.Stop()
+		bp.timer = nil
 	}
 
 	return bp.processBatch()
@@ -465,12 +619,28 @@ func (bp *BatchProcessor) Close() error {
 
 // process processes the batch (called by timer).
 func (bp *BatchProcessor) process() {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
-
-	if len(bp.items) > 0 {
-		bp.processBatch()
+	if bp == nil {
+		return
 	}
+
+	bp.mu.Lock()
+
+	// Check if we have items to process
+	if len(bp.items) == 0 {
+		bp.mu.Unlock()
+		return
+	}
+
+	// Stop timer
+	if bp.timer != nil {
+		bp.timer.Stop()
+		bp.timer = nil
+	}
+
+	// Process batch using shared logic
+	bp.processBatchInternal()
+
+	bp.mu.Unlock()
 }
 
 // processBatch processes the current batch.
@@ -485,6 +655,14 @@ func (bp *BatchProcessor) processBatch() error {
 		bp.timer = nil
 	}
 
+	// Process batch using shared logic
+	bp.processBatchInternal()
+
+	return nil
+}
+
+// processBatchInternal contains the shared logic for processing batches.
+func (bp *BatchProcessor) processBatchInternal() {
 	// Process batch
 	items := make([]interface{}, len(bp.items))
 	copy(items, bp.items)
@@ -493,10 +671,10 @@ func (bp *BatchProcessor) processBatch() error {
 	// Process in goroutine to avoid blocking
 	go func() {
 		if err := bp.processor(items); err != nil {
-			// Log error but don't block
-			// TODO: Add proper error handling
+			// Use error handler if available
+			if bp.errorHandler != nil {
+				bp.errorHandler(err)
+			}
 		}
 	}()
-
-	return nil
 }

@@ -73,7 +73,11 @@ func demonstratePublisherWithConfirms() {
 	logx.Info("✅ Created transport", logx.String("connection_pooling", "enabled"))
 
 	// Create publisher
-	publisher := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
+	publisher, err := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
+	if err != nil {
+		logx.Error("Failed to create publisher", logx.ErrorField(err))
+		return
+	}
 	logx.Info("✅ Created publisher", logx.Bool("confirms_enabled", config.Publisher.Confirms))
 
 	// Demonstrate message publishing with confirms
@@ -151,7 +155,11 @@ func demonstratePublisherWithoutConfirms() {
 	obsCtx := messaging.NewObservabilityContext(context.Background(), obsProvider)
 
 	transport := rabbitmq.NewTransport(config, obsCtx)
-	publisher := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
+	publisher, err := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
+	if err != nil {
+		logx.Error("Failed to create publisher", logx.ErrorField(err))
+		return
+	}
 
 	logx.Info("✅ Created publisher", logx.Bool("confirms_disabled", true))
 	logx.Info("⚡ Receipts complete immediately after publish", logx.String("mode", "fire-and-forget"))

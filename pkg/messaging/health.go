@@ -4,6 +4,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -80,14 +81,25 @@ type HealthManager struct {
 
 // NewHealthManager creates a new health manager.
 func NewHealthManager(timeout time.Duration) *HealthManager {
+	if timeout <= 0 {
+		timeout = 30 * time.Second // Default timeout
+	}
 	return &HealthManager{
 		checkers: make(map[string]HealthChecker),
 		timeout:  timeout,
 	}
+
 }
 
 // Register registers a health checker.
 func (hm *HealthManager) Register(name string, checker HealthChecker) {
+	if name == "" {
+		panic("health checker name cannot be empty")
+	}
+	if checker == nil {
+		panic("health checker cannot be nil")
+	}
+
 	hm.mu.Lock()
 	defer hm.mu.Unlock()
 	hm.checkers[name] = checker
@@ -95,11 +107,22 @@ func (hm *HealthManager) Register(name string, checker HealthChecker) {
 
 // RegisterFunc registers a health check function.
 func (hm *HealthManager) RegisterFunc(name string, fn func(ctx context.Context) HealthCheck) {
+	if name == "" {
+		panic("health checker name cannot be empty")
+	}
+	if fn == nil {
+		panic("health check function cannot be nil")
+	}
+
 	hm.Register(name, HealthCheckerFunc(fn))
 }
 
 // Unregister removes a health checker.
 func (hm *HealthManager) Unregister(name string) {
+	if name == "" {
+		return
+	}
+
 	hm.mu.Lock()
 	defer hm.mu.Unlock()
 	delete(hm.checkers, name)
@@ -107,12 +130,24 @@ func (hm *HealthManager) Unregister(name string) {
 
 // Check performs all registered health checks.
 func (hm *HealthManager) Check(ctx context.Context) map[string]HealthCheck {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Create a timeout context for the entire operation
+	checkCtx, cancel := context.WithTimeout(ctx, hm.timeout)
+	defer cancel()
+
 	hm.mu.RLock()
 	checkers := make(map[string]HealthChecker, len(hm.checkers))
 	for k, v := range hm.checkers {
 		checkers[k] = v
 	}
 	hm.mu.RUnlock()
+
+	if len(checkers) == 0 {
+		return make(map[string]HealthCheck)
+	}
 
 	results := make(map[string]HealthCheck)
 	var wg sync.WaitGroup
@@ -122,13 +157,26 @@ func (hm *HealthManager) Check(ctx context.Context) map[string]HealthCheck {
 		wg.Add(1)
 		go func(name string, checker HealthChecker) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					mu.Lock()
+					results[name] = HealthCheck{
+						Name:      name,
+						Status:    HealthStatusUnhealthy,
+						Message:   fmt.Sprintf("Health check panicked: %v", r),
+						Timestamp: time.Now(),
+						Error:     fmt.Errorf("panic: %v", r),
+					}
+					mu.Unlock()
+				}
+			}()
 
-			// Create a timeout context for this check
-			checkCtx, cancel := context.WithTimeout(ctx, hm.timeout)
+			// Create a timeout context for this individual check
+			individualCtx, cancel := context.WithTimeout(checkCtx, hm.timeout)
 			defer cancel()
 
 			start := time.Now()
-			result := checker.Check(checkCtx)
+			result := checker.Check(individualCtx)
 			result.Duration = time.Since(start)
 			result.Timestamp = start
 
@@ -230,7 +278,29 @@ func (hm *HealthManager) GenerateReport(ctx context.Context) HealthReport {
 		}
 	}
 
-	status := hm.OverallStatus(ctx)
+	// Determine overall status based on the checks we already have
+	status := HealthStatusUnknown
+	if len(checks) > 0 {
+		hasUnhealthy := false
+		hasDegraded := false
+
+		for _, check := range checks {
+			switch check.Status {
+			case HealthStatusUnhealthy:
+				hasUnhealthy = true
+			case HealthStatusDegraded:
+				hasDegraded = true
+			}
+		}
+
+		if hasUnhealthy {
+			status = HealthStatusUnhealthy
+		} else if hasDegraded {
+			status = HealthStatusDegraded
+		} else {
+			status = HealthStatusHealthy
+		}
+	}
 
 	return HealthReport{
 		Status:    status,
@@ -251,6 +321,13 @@ type ConnectionHealthChecker struct {
 
 // NewConnectionHealthChecker creates a new connection health checker.
 func NewConnectionHealthChecker(transport string, checkFn func(ctx context.Context) (bool, error)) *ConnectionHealthChecker {
+	if transport == "" {
+		panic("transport name cannot be empty")
+	}
+	if checkFn == nil {
+		panic("check function cannot be nil")
+	}
+
 	return &ConnectionHealthChecker{
 		transport: transport,
 		checkFn:   checkFn,
@@ -264,6 +341,10 @@ func (c *ConnectionHealthChecker) Name() string {
 
 // Check performs the connection health check.
 func (c *ConnectionHealthChecker) Check(ctx context.Context) HealthCheck {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	healthy, err := c.checkFn(ctx)
 
 	status := HealthStatusHealthy
@@ -296,6 +377,10 @@ type MemoryHealthChecker struct {
 
 // NewMemoryHealthChecker creates a new memory health checker.
 func NewMemoryHealthChecker(maxUsagePercent float64) *MemoryHealthChecker {
+	if maxUsagePercent <= 0 || maxUsagePercent > 100 {
+		panic("maxUsagePercent must be between 0 and 100")
+	}
+
 	return &MemoryHealthChecker{
 		maxUsagePercent: maxUsagePercent,
 	}
@@ -308,15 +393,39 @@ func (m *MemoryHealthChecker) Name() string {
 
 // Check performs the memory health check.
 func (m *MemoryHealthChecker) Check(ctx context.Context) HealthCheck {
-	// TODO: Implement actual memory usage check
-	// For now, return a placeholder
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	// Calculate memory usage percentage
+	totalMemory := memStats.Sys
+	usedMemory := memStats.Alloc
+	usagePercent := float64(usedMemory) / float64(totalMemory) * 100
+
+	status := HealthStatusHealthy
+	message := fmt.Sprintf("Memory usage: %.2f%%", usagePercent)
+
+	if usagePercent > m.maxUsagePercent {
+		status = HealthStatusUnhealthy
+		message = fmt.Sprintf("Memory usage %.2f%% exceeds limit %.2f%%", usagePercent, m.maxUsagePercent)
+	} else if usagePercent > m.maxUsagePercent*0.8 {
+		status = HealthStatusDegraded
+		message = fmt.Sprintf("Memory usage %.2f%% is approaching limit %.2f%%", usagePercent, m.maxUsagePercent)
+	}
+
 	return HealthCheck{
 		Name:      m.Name(),
-		Status:    HealthStatusHealthy,
-		Message:   "Memory usage is within limits",
+		Status:    status,
+		Message:   message,
 		Timestamp: time.Now(),
 		Details: map[string]interface{}{
-			"max_usage_percent": m.maxUsagePercent,
+			"max_usage_percent":     m.maxUsagePercent,
+			"current_usage_percent": usagePercent,
+			"total_memory_bytes":    totalMemory,
+			"used_memory_bytes":     usedMemory,
 		},
 	}
 }
@@ -328,6 +437,10 @@ type GoroutineHealthChecker struct {
 
 // NewGoroutineHealthChecker creates a new goroutine health checker.
 func NewGoroutineHealthChecker(maxGoroutines int) *GoroutineHealthChecker {
+	if maxGoroutines <= 0 {
+		panic("maxGoroutines must be positive")
+	}
+
 	return &GoroutineHealthChecker{
 		maxGoroutines: maxGoroutines,
 	}
@@ -340,15 +453,31 @@ func (g *GoroutineHealthChecker) Name() string {
 
 // Check performs the goroutine health check.
 func (g *GoroutineHealthChecker) Check(ctx context.Context) HealthCheck {
-	// TODO: Implement actual goroutine count check
-	// For now, return a placeholder
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	currentGoroutines := runtime.NumGoroutine()
+
+	status := HealthStatusHealthy
+	message := fmt.Sprintf("Goroutine count: %d", currentGoroutines)
+
+	if currentGoroutines > g.maxGoroutines {
+		status = HealthStatusUnhealthy
+		message = fmt.Sprintf("Goroutine count %d exceeds limit %d", currentGoroutines, g.maxGoroutines)
+	} else if currentGoroutines > int(float64(g.maxGoroutines)*0.8) {
+		status = HealthStatusDegraded
+		message = fmt.Sprintf("Goroutine count %d is approaching limit %d", currentGoroutines, g.maxGoroutines)
+	}
+
 	return HealthCheck{
 		Name:      g.Name(),
-		Status:    HealthStatusHealthy,
-		Message:   "Goroutine count is within limits",
+		Status:    status,
+		Message:   message,
 		Timestamp: time.Now(),
 		Details: map[string]interface{}{
-			"max_goroutines": g.maxGoroutines,
+			"max_goroutines":     g.maxGoroutines,
+			"current_goroutines": currentGoroutines,
 		},
 	}
 }

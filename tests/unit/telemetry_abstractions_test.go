@@ -205,9 +205,9 @@ func TestCorrelationMiddleware(t *testing.T) {
 	// Test publisher middleware
 	publisherMiddleware := middleware.PublisherMiddleware()
 	ctx := context.Background()
-	msg := messaging.NewMessage([]byte("test"), messaging.WithID("msg-123"))
+	msg := messaging.NewMessage([]byte("test"), messaging.WithID("msg-123"), messaging.WithKey("test.key"))
 
-	ctx, modifiedMsg := publisherMiddleware(ctx, "test.topic", msg)
+	ctx, modifiedMsg := publisherMiddleware(ctx, "test.topic", *msg)
 
 	assert.NotEmpty(t, modifiedMsg.CorrelationID)
 	assert.NotEmpty(t, modifiedMsg.Headers["X-Correlation-ID"])
@@ -384,9 +384,9 @@ func TestTelemetryMiddleware(t *testing.T) {
 	// Test publisher telemetry middleware
 	publisherMiddleware := middleware.PublisherTelemetryMiddleware()
 	ctx := context.Background()
-	msg := messaging.NewMessage([]byte("test"), messaging.WithID("msg-123"))
+	msg := messaging.NewMessage([]byte("test"), messaging.WithID("msg-123"), messaging.WithKey("test.key"))
 
-	ctx, modifiedMsg := publisherMiddleware(ctx, "test.topic", msg)
+	ctx, modifiedMsg := publisherMiddleware(ctx, "test.topic", *msg)
 
 	assert.NotEmpty(t, modifiedMsg.Headers["X-Telemetry-Start"])
 

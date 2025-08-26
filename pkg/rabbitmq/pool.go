@@ -3,6 +3,7 @@ package rabbitmq
 
 import (
 	"context"
+	"fmt" // Added for fmt.Sprintf
 	"math/rand"
 	"sync"
 	"time"
@@ -33,6 +34,13 @@ type ConnectionInfo struct {
 	LastUsed   time.Time
 	ErrorCount int
 	CloseChan  chan *amqp091.Error
+	URI        string // Store URI for recovery
+
+	// Connection reuse optimization fields
+	UseCount    int64         // Number of times this connection has been used
+	IdleTime    time.Duration // Current idle time
+	HealthScore float64       // Health score based on error count and age
+	IsIdle      bool          // Whether connection is currently idle
 }
 
 // ConnectionPool manages a pool of RabbitMQ connections with health monitoring and auto-recovery.
@@ -58,6 +66,11 @@ type ConnectionPool struct {
 
 	// Lifecycle management
 	lifecycleChan chan ConnectionLifecycleEvent
+
+	// Connection reuse optimization
+	lastUsedIndex int           // For round-robin selection
+	idleThreshold time.Duration // Threshold for considering connection idle
+	maxIdleTime   time.Duration // Maximum idle time before closing
 }
 
 // ConnectionLifecycleEvent represents a connection lifecycle event
@@ -73,6 +86,15 @@ type ConnectionLifecycleEvent struct {
 func NewConnectionPool(config *messaging.ConnectionPoolConfig, logger *logx.Logger, metrics messaging.Metrics) *ConnectionPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Set default idle thresholds
+	idleThreshold := 5 * time.Minute
+	maxIdleTime := 30 * time.Minute
+	if config != nil {
+		// Use health check interval as idle threshold
+		idleThreshold = config.HealthCheckInterval * 2
+		maxIdleTime = config.HealthCheckInterval * 10
+	}
+
 	pool := &ConnectionPool{
 		config:        config,
 		connections:   make(map[*amqp091.Connection]*ConnectionInfo),
@@ -83,6 +105,8 @@ func NewConnectionPool(config *messaging.ConnectionPoolConfig, logger *logx.Logg
 		lifecycleChan: make(chan ConnectionLifecycleEvent, 100),
 		healthCtx:     ctx,
 		healthCancel:  cancel,
+		idleThreshold: idleThreshold,
+		maxIdleTime:   maxIdleTime,
 	}
 
 	// Start health monitoring
@@ -91,7 +115,95 @@ func NewConnectionPool(config *messaging.ConnectionPoolConfig, logger *logx.Logg
 	// Start lifecycle event processing
 	go pool.processLifecycleEvents()
 
+	// Warm up the connection pool with minimum connections
+	go pool.warmupConnections()
+
 	return pool
+}
+
+// calculateHealthScore calculates a health score for a connection based on error count and age
+func (cp *ConnectionPool) calculateHealthScore(info *ConnectionInfo) float64 {
+	if info == nil {
+		return 0.0
+	}
+
+	// Base score starts at 1.0
+	score := 1.0
+
+	// Penalize based on error count
+	errorPenalty := float64(info.ErrorCount) * 0.2
+	score -= errorPenalty
+
+	// Penalize based on age (older connections get slightly lower scores)
+	age := time.Since(info.CreatedAt)
+	agePenalty := float64(age.Hours()) * 0.01 // Small penalty for age
+	score -= agePenalty
+
+	// Ensure score doesn't go below 0
+	if score < 0 {
+		score = 0
+	}
+
+	return score
+}
+
+// warmupConnections pre-creates minimum connections for the pool
+func (cp *ConnectionPool) warmupConnections() {
+	// Wait a short time to ensure pool is fully initialized
+	time.Sleep(100 * time.Millisecond)
+
+	minConnections := 2 // Default min connections
+	if cp.config != nil {
+		minConnections = cp.config.Min
+	}
+
+	// Get a default URI for warmup (will be overridden when actual connections are needed)
+	defaultURI := "amqp://localhost:5672"
+
+	if cp.logger != nil {
+		cp.logger.Info("warming up connection pool", logx.Int("min_connections", minConnections))
+	}
+
+	// Create minimum connections in background
+	for i := 0; i < minConnections; i++ {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			conn, err := cp.createConnectionWithRetry(ctx, defaultURI)
+			if err != nil {
+				if cp.logger != nil {
+					cp.logger.Warn("failed to warm up connection", logx.String("error", err.Error()))
+				}
+				return
+			}
+
+			cp.mu.Lock()
+			if !cp.closed && len(cp.connections) < minConnections {
+				info := &ConnectionInfo{
+					Connection:  conn,
+					State:       ConnectionStateConnected,
+					CreatedAt:   time.Now(),
+					LastUsed:    time.Now(),
+					CloseChan:   make(chan *amqp091.Error, 1),
+					URI:         defaultURI,
+					UseCount:    0,
+					HealthScore: 1.0,
+				}
+
+				cp.connections[conn] = info
+				go cp.monitorConnectionClose(conn, info)
+
+				if cp.logger != nil {
+					cp.logger.Debug("warmed up connection", logx.Int("pool_size", len(cp.connections)))
+				}
+			} else {
+				// Pool is closed or we have enough connections, close this one
+				conn.Close()
+			}
+			cp.mu.Unlock()
+		}()
+	}
 }
 
 // GetConnection returns a connection from the pool with auto-recovery.
@@ -104,27 +216,64 @@ func (cp *ConnectionPool) GetConnection(ctx context.Context, uri string) (*amqp0
 	}
 
 	// Check if we have available healthy connections
+	// Use optimized connection selection: least used, then round-robin
+	var bestConn *amqp091.Connection
+	var bestInfo *ConnectionInfo
+	var minUseCount int64 = 1<<63 - 1 // Max int64
+
 	for conn, info := range cp.connections {
 		if info.State == ConnectionStateConnected && !conn.IsClosed() {
-			info.LastUsed = time.Now()
-			cp.logger.Debug("reusing existing connection", logx.String("uri", uri))
-			return conn, nil
+			// Update idle time
+			info.IdleTime = time.Since(info.LastUsed)
+
+			// Select connection with least usage (load balancing)
+			if info.UseCount < minUseCount {
+				minUseCount = info.UseCount
+				bestConn = conn
+				bestInfo = info
+			}
 		}
 	}
 
+	if bestConn != nil {
+		// Update connection usage
+		bestInfo.LastUsed = time.Now()
+		bestInfo.UseCount++
+		bestInfo.IdleTime = 0
+		bestInfo.IsIdle = false
+
+		// Update health score
+		bestInfo.HealthScore = cp.calculateHealthScore(bestInfo)
+
+		if cp.logger != nil {
+			cp.logger.Debug("reusing existing connection",
+				logx.String("uri", uri),
+				logx.Int64("use_count", bestInfo.UseCount),
+				logx.String("idle_time", bestInfo.IdleTime.String()))
+		}
+		return bestConn, nil
+	}
+
 	// Create new connection if under limit
-	if len(cp.connections) < cp.config.Max {
+	maxConnections := 8 // Default max connections
+	if cp.config != nil {
+		maxConnections = cp.config.Max
+	}
+	if len(cp.connections) < maxConnections {
 		conn, err := cp.createConnectionWithRetry(ctx, uri)
 		if err != nil {
 			return nil, err
 		}
 
 		info := &ConnectionInfo{
-			Connection: conn,
-			State:      ConnectionStateConnected,
-			CreatedAt:  time.Now(),
-			LastUsed:   time.Now(),
-			CloseChan:  make(chan *amqp091.Error, 1),
+			Connection:  conn,
+			State:       ConnectionStateConnected,
+			CreatedAt:   time.Now(),
+			LastUsed:    time.Now(),
+			CloseChan:   make(chan *amqp091.Error, 1),
+			URI:         uri, // Store the URI
+			UseCount:    1,   // First use
+			HealthScore: 1.0,
 		}
 
 		cp.connections[conn] = info
@@ -132,19 +281,25 @@ func (cp *ConnectionPool) GetConnection(ctx context.Context, uri string) (*amqp0
 		// Set up connection close notification
 		go cp.monitorConnectionClose(conn, info)
 
-		cp.logger.Info("created new connection",
-			logx.String("uri", uri),
-			logx.Int("pool_size", len(cp.connections)))
+		if cp.logger != nil {
+			cp.logger.Info("created new connection",
+				logx.String("uri", uri),
+				logx.Int("pool_size", len(cp.connections)))
+		}
 
 		cp.recordConnectionMetrics("created", uri)
 		return conn, nil
 	}
 
 	// Wait for a connection to become available with timeout
+	connectionTimeout := 10 * time.Second // Default timeout
+	if cp.config != nil {
+		connectionTimeout = cp.config.ConnectionTimeout
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(cp.config.ConnectionTimeout):
+	case <-time.After(connectionTimeout):
 		return nil, messaging.NewError(messaging.ErrorCodeConnection, "get_connection", "timeout waiting for available connection")
 	}
 }
@@ -156,32 +311,42 @@ func (cp *ConnectionPool) createConnectionWithRetry(ctx context.Context, uri str
 
 	var lastErr error
 	for attempt := 0; attempt <= cp.maxRetries; attempt++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
 		}
 
 		// Add jitter to backoff delay
 		jitter := time.Duration(rand.Int63n(int64(cp.recoveryDelay / 2)))
 		delay := cp.recoveryDelay + jitter
 
-		if attempt > 0 {
+		if attempt > 0 && cp.logger != nil {
 			cp.logger.Info("retrying connection creation",
 				logx.String("uri", uri),
 				logx.Int("attempt", attempt),
 				logx.String("delay", delay.String()))
 
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(delay):
+			if ctx != nil {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(delay):
+				}
+			} else {
+				time.Sleep(delay)
 			}
 		}
 
 		// Create connection with timeout
+		heartbeatInterval := 10 * time.Second // Default heartbeat interval
+		if cp.config != nil {
+			heartbeatInterval = cp.config.HeartbeatInterval
+		}
 		conn, err := amqp091.DialConfig(uri, amqp091.Config{
-			Heartbeat: cp.config.HeartbeatInterval,
+			Heartbeat: heartbeatInterval,
 		})
 
 		if err == nil {
@@ -205,6 +370,13 @@ func (cp *ConnectionPool) createConnectionWithRetry(ctx context.Context, uri str
 
 // monitorConnectionClose monitors connection close events
 func (cp *ConnectionPool) monitorConnectionClose(conn *amqp091.Connection, info *ConnectionInfo) {
+	defer func() {
+		// Clean up the notification channel
+		if info.CloseChan != nil {
+			close(info.CloseChan)
+		}
+	}()
+
 	closeChan := conn.NotifyClose(make(chan *amqp091.Error, 1))
 
 	select {
@@ -226,28 +398,37 @@ func (cp *ConnectionPool) handleConnectionClose(conn *amqp091.Connection, info *
 		info.ErrorCount++
 	}
 
-	if err != nil {
-		cp.logger.Warn("connection closed",
-			logx.String("error", err.Error()),
-			logx.Int("error_count", info.ErrorCount))
-	} else {
-		cp.logger.Warn("connection closed",
-			logx.Int("error_count", info.ErrorCount))
+	if cp.logger != nil {
+		if err != nil {
+			cp.logger.Warn("connection closed",
+				logx.String("error", err.Error()),
+				logx.Int("error_count", info.ErrorCount))
+		} else {
+			cp.logger.Warn("connection closed",
+				logx.Int("error_count", info.ErrorCount))
+		}
 	}
 
 	cp.recordConnectionMetrics("closed", "")
 
-	// Emit lifecycle event
-	select {
-	case cp.lifecycleChan <- ConnectionLifecycleEvent{
-		Connection: conn,
-		Event:      "closed",
-		State:      info.State,
-		Error:      err,
-		Timestamp:  time.Now(),
-	}:
-	default:
-		// Channel full, skip event
+	// Emit lifecycle event only if pool is not closed
+	// Use a non-blocking check to avoid deadlock
+	cp.mu.RLock()
+	poolClosed := cp.closed
+	cp.mu.RUnlock()
+
+	if !poolClosed {
+		select {
+		case cp.lifecycleChan <- ConnectionLifecycleEvent{
+			Connection: conn,
+			Event:      "closed",
+			State:      info.State,
+			Error:      err,
+			Timestamp:  time.Now(),
+		}:
+		default:
+			// Channel full, skip event
+		}
 	}
 
 	// Attempt auto-recovery if not at max retries
@@ -256,8 +437,10 @@ func (cp *ConnectionPool) handleConnectionClose(conn *amqp091.Connection, info *
 	} else {
 		// Remove failed connection
 		delete(cp.connections, conn)
-		cp.logger.Error("removing failed connection after max retries",
-			logx.Int("error_count", info.ErrorCount))
+		if cp.logger != nil {
+			cp.logger.Error("removing failed connection after max retries",
+				logx.Int("error_count", info.ErrorCount))
+		}
 	}
 }
 
@@ -267,16 +450,24 @@ func (cp *ConnectionPool) attemptRecovery(conn *amqp091.Connection, info *Connec
 	info.State = ConnectionStateConnecting
 	cp.mu.Unlock()
 
-	cp.logger.Info("attempting connection recovery",
-		logx.Int("error_count", info.ErrorCount))
+	if cp.logger != nil {
+		cp.logger.Info("attempting connection recovery",
+			logx.Int("error_count", info.ErrorCount))
+	}
 
 	// Wait before attempting recovery
 	time.Sleep(cp.recoveryDelay)
 
+	// Create a timeout context for recovery
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Try to create new connection
-	newConn, err := cp.createConnectionWithRetry(context.Background(), "")
+	newConn, err := cp.createConnectionWithRetry(recoveryCtx, info.URI)
 	if err != nil {
-		cp.logger.Error("connection recovery failed", logx.String("error", err.Error()))
+		if cp.logger != nil {
+			cp.logger.Error("connection recovery failed", logx.String("error", err.Error()))
+		}
 		return
 	}
 
@@ -287,12 +478,15 @@ func (cp *ConnectionPool) attemptRecovery(conn *amqp091.Connection, info *Connec
 	delete(cp.connections, conn)
 
 	newInfo := &ConnectionInfo{
-		Connection: newConn,
-		State:      ConnectionStateConnected,
-		CreatedAt:  time.Now(),
-		LastUsed:   time.Now(),
-		ErrorCount: 0,
-		CloseChan:  make(chan *amqp091.Error, 1),
+		Connection:  newConn,
+		State:       ConnectionStateConnected,
+		CreatedAt:   time.Now(),
+		LastUsed:    time.Now(),
+		ErrorCount:  0,
+		CloseChan:   make(chan *amqp091.Error, 1),
+		URI:         info.URI, // Use the stored URI for recovery
+		UseCount:    0,        // Reset use count for recovered connection
+		HealthScore: 1.0,      // Reset health score
 	}
 
 	cp.connections[newConn] = newInfo
@@ -300,15 +494,24 @@ func (cp *ConnectionPool) attemptRecovery(conn *amqp091.Connection, info *Connec
 	// Set up monitoring for new connection
 	go cp.monitorConnectionClose(newConn, newInfo)
 
-	cp.logger.Info("connection recovery successful")
+	if cp.logger != nil {
+		cp.logger.Info("connection recovery successful")
+	}
 	cp.recordConnectionMetrics("recovered", "")
 }
 
 // startHealthMonitoring starts periodic health checks
 func (cp *ConnectionPool) startHealthMonitoring() {
-	cp.healthTicker = time.NewTicker(cp.config.HealthCheckInterval)
+	// Use default health check interval if config is nil
+	healthCheckInterval := 30 * time.Second
+	if cp.config != nil {
+		healthCheckInterval = cp.config.HealthCheckInterval
+	}
+
+	cp.healthTicker = time.NewTicker(healthCheckInterval)
 
 	go func() {
+		defer cp.healthTicker.Stop()
 		for {
 			select {
 			case <-cp.healthTicker.C:
@@ -329,24 +532,65 @@ func (cp *ConnectionPool) performHealthCheck() {
 	}
 	cp.mu.RUnlock()
 
+	// Collect connections that need to be closed
+	var connectionsToClose []*amqp091.Connection
+	var idleConnections []*amqp091.Connection
+
 	for conn, info := range connections {
 		if conn.IsClosed() {
-			cp.handleConnectionClose(conn, info, nil)
+			connectionsToClose = append(connectionsToClose, conn)
 			continue
 		}
 
-		// Check connection age and usage
-		age := time.Since(info.CreatedAt)
-		idleTime := time.Since(info.LastUsed)
+		// Update idle time and health score
+		info.IdleTime = time.Since(info.LastUsed)
+		info.HealthScore = cp.calculateHealthScore(info)
+
+		// Mark as idle if threshold exceeded
+		if info.IdleTime > cp.idleThreshold {
+			info.IsIdle = true
+			idleConnections = append(idleConnections, conn)
+		} else {
+			info.IsIdle = false
+		}
+
+		// Check if connection should be closed due to excessive idle time
+		if info.IdleTime > cp.maxIdleTime {
+			connectionsToClose = append(connectionsToClose, conn)
+			if cp.logger != nil {
+				cp.logger.Info("closing idle connection",
+					logx.String("idle_time", info.IdleTime.String()),
+					logx.String("max_idle_time", cp.maxIdleTime.String()))
+			}
+			continue
+		}
 
 		// Log health metrics
-		cp.logger.Debug("connection health check",
-			logx.String("age", age.String()),
-			logx.String("idle_time", idleTime.String()),
-			logx.Int("error_count", info.ErrorCount))
+		if cp.logger != nil {
+			cp.logger.Debug("connection health check",
+				logx.String("age", time.Since(info.CreatedAt).String()),
+				logx.String("idle_time", info.IdleTime.String()),
+				logx.Int("error_count", info.ErrorCount),
+				logx.Float64("health_score", info.HealthScore),
+				logx.Int64("use_count", info.UseCount))
+		}
 
 		// Record health metrics
 		cp.recordConnectionHealthMetrics(conn, info)
+	}
+
+	// Handle connections that need to be closed (outside of read lock)
+	for _, conn := range connectionsToClose {
+		if info, exists := connections[conn]; exists {
+			cp.handleConnectionClose(conn, info, nil)
+		}
+	}
+
+	// Log idle connection count
+	if len(idleConnections) > 0 && cp.logger != nil {
+		cp.logger.Debug("idle connections detected",
+			logx.Int("idle_count", len(idleConnections)),
+			logx.Int("total_connections", len(connections)))
 	}
 }
 
@@ -354,16 +598,22 @@ func (cp *ConnectionPool) performHealthCheck() {
 func (cp *ConnectionPool) processLifecycleEvents() {
 	for {
 		select {
-		case event := <-cp.lifecycleChan:
-			if event.Error != nil {
-				cp.logger.Info("connection lifecycle event",
-					logx.String("event", event.Event),
-					logx.String("state", event.State.String()),
-					logx.String("error", event.Error.Error()))
-			} else {
-				cp.logger.Info("connection lifecycle event",
-					logx.String("event", event.Event),
-					logx.String("state", event.State.String()))
+		case event, ok := <-cp.lifecycleChan:
+			if !ok {
+				// Channel closed, exit
+				return
+			}
+			if cp.logger != nil {
+				if event.Error != nil {
+					cp.logger.Info("connection lifecycle event",
+						logx.String("event", event.Event),
+						logx.String("state", event.State.String()),
+						logx.String("error", event.Error.Error()))
+				} else {
+					cp.logger.Info("connection lifecycle event",
+						logx.String("event", event.Event),
+						logx.String("state", event.State.String()))
+				}
 			}
 		case <-cp.healthCtx.Done():
 			return
@@ -373,7 +623,7 @@ func (cp *ConnectionPool) processLifecycleEvents() {
 
 // recordConnectionMetrics records connection-related metrics
 func (cp *ConnectionPool) recordConnectionMetrics(action, uri string) {
-	if cp.metrics != nil {
+	if cp.metrics != nil && cp.connections != nil {
 		// Record connection pool metrics
 		cp.metrics.ConnectionsActive("rabbitmq", len(cp.connections))
 	}
@@ -381,7 +631,7 @@ func (cp *ConnectionPool) recordConnectionMetrics(action, uri string) {
 
 // recordConnectionHealthMetrics records connection health metrics
 func (cp *ConnectionPool) recordConnectionHealthMetrics(conn *amqp091.Connection, info *ConnectionInfo) {
-	if cp.metrics != nil {
+	if cp.metrics != nil && cp.connections != nil {
 		// Record health metrics
 		cp.metrics.ConnectionsActive("rabbitmq", len(cp.connections))
 	}
@@ -392,11 +642,76 @@ func (cp *ConnectionPool) GetStats() map[string]interface{} {
 	cp.mu.RLock()
 	defer cp.mu.RUnlock()
 
+	maxConnections := 8 // Default max connections
+	minConnections := 2 // Default min connections
+	if cp.config != nil {
+		maxConnections = cp.config.Max
+		minConnections = cp.config.Min
+	}
+
+	// Calculate enhanced statistics
+	var totalUseCount int64
+	var totalIdleTime time.Duration
+	var idleConnections int
+	var avgHealthScore float64
+	var maxUseCount int64
+	var minUseCount int64 = 1<<63 - 1
+
+	for _, info := range cp.connections {
+		totalUseCount += info.UseCount
+		totalIdleTime += info.IdleTime
+
+		if info.IsIdle {
+			idleConnections++
+		}
+
+		if info.UseCount > maxUseCount {
+			maxUseCount = info.UseCount
+		}
+		if info.UseCount < minUseCount {
+			minUseCount = info.UseCount
+		}
+
+		avgHealthScore += info.HealthScore
+	}
+
+	connectionCount := len(cp.connections)
+	if connectionCount > 0 {
+		avgHealthScore /= float64(connectionCount)
+		if minUseCount == 1<<63-1 {
+			minUseCount = 0
+		}
+	} else {
+		// Handle empty pool case
+		avgHealthScore = 0
+		minUseCount = 0
+	}
+
 	stats := map[string]interface{}{
-		"total_connections": len(cp.connections),
-		"max_connections":   cp.config.Max,
-		"min_connections":   cp.config.Min,
-		"closed":            cp.closed,
+		"total_connections":  connectionCount,
+		"max_connections":    maxConnections,
+		"min_connections":    minConnections,
+		"closed":             cp.closed,
+		"idle_connections":   idleConnections,
+		"active_connections": connectionCount - idleConnections,
+		"total_use_count":    totalUseCount,
+		"avg_use_count": func() float64 {
+			if connectionCount > 0 {
+				return float64(totalUseCount) / float64(connectionCount)
+			}
+			return 0
+		}(),
+		"max_use_count": maxUseCount,
+		"min_use_count": minUseCount,
+		"avg_idle_time": func() time.Duration {
+			if connectionCount > 0 {
+				return totalIdleTime / time.Duration(connectionCount)
+			}
+			return 0
+		}(),
+		"avg_health_score": avgHealthScore,
+		"idle_threshold":   cp.idleThreshold,
+		"max_idle_time":    cp.maxIdleTime,
 	}
 
 	// Count connections by state
@@ -411,10 +726,24 @@ func (cp *ConnectionPool) GetStats() map[string]interface{} {
 
 // Close closes all connections in the pool.
 func (cp *ConnectionPool) Close() error {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
+	// Try to acquire lock with timeout to avoid deadlock
+	done := make(chan struct{})
+
+	go func() {
+		cp.mu.Lock()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Lock acquired successfully
+	case <-time.After(5 * time.Second):
+		// Timeout - return error
+		return messaging.NewError(messaging.ErrorCodeConnection, "close_pool", "timeout acquiring lock for pool close")
+	}
 
 	if cp.closed {
+		cp.mu.Unlock()
 		return nil
 	}
 
@@ -426,9 +755,10 @@ func (cp *ConnectionPool) Close() error {
 	}
 	cp.healthCancel()
 
-	// Close lifecycle channel
+	// Close lifecycle channel to signal goroutines to stop
 	close(cp.lifecycleChan)
 
+	// Close all connections
 	var errs []error
 	for conn, info := range cp.connections {
 		info.State = ConnectionStateClosed
@@ -437,8 +767,21 @@ func (cp *ConnectionPool) Close() error {
 		}
 	}
 
+	cp.mu.Unlock()
+
+	// Wait a short time for goroutines to finish
+	// This prevents the test from hanging indefinitely
+	time.Sleep(200 * time.Millisecond)
+
 	if len(errs) > 0 {
-		return messaging.WrapError(messaging.ErrorCodeConnection, "close_pool", "failed to close some connections", errs[0])
+		// Create a comprehensive error message
+		errMsg := "failed to close some connections"
+		if len(errs) == 1 {
+			return messaging.WrapError(messaging.ErrorCodeConnection, "close_pool", errMsg, errs[0])
+		}
+		// For multiple errors, wrap the first one but include count
+		return messaging.WrapError(messaging.ErrorCodeConnection, "close_pool",
+			errMsg+fmt.Sprintf(" (%d errors)", len(errs)), errs[0])
 	}
 
 	return nil
@@ -471,14 +814,17 @@ type ChannelPool struct {
 	conn     *amqp091.Connection
 	mu       sync.RWMutex
 	closed   bool
+	// Track all created channels for proper cleanup
+	allChannels map[*amqp091.Channel]bool
 }
 
 // NewChannelPool creates a new channel pool.
 func NewChannelPool(config *messaging.ChannelPoolConfig, conn *amqp091.Connection) *ChannelPool {
 	return &ChannelPool{
-		config:   config,
-		channels: make(chan *amqp091.Channel, config.PerConnectionMax),
-		conn:     conn,
+		config:      config,
+		channels:    make(chan *amqp091.Channel, config.PerConnectionMax),
+		conn:        conn,
+		allChannels: make(map[*amqp091.Channel]bool),
 	}
 }
 
@@ -488,7 +834,11 @@ func (cp *ChannelPool) Initialize() error {
 	defer cp.mu.Unlock()
 
 	// Create initial channels
-	for i := 0; i < cp.config.PerConnectionMin; i++ {
+	perConnectionMin := 10 // Default min channels per connection
+	if cp.config != nil {
+		perConnectionMin = cp.config.PerConnectionMin
+	}
+	for i := 0; i < perConnectionMin; i++ {
 		channel, err := cp.createChannel()
 		if err != nil {
 			return err
@@ -501,23 +851,31 @@ func (cp *ChannelPool) Initialize() error {
 
 // Borrow borrows a channel from the pool.
 func (cp *ChannelPool) Borrow(ctx context.Context) (*amqp091.Channel, error) {
+	borrowTimeout := 5 * time.Second // Default borrow timeout
+	if cp.config != nil {
+		borrowTimeout = cp.config.BorrowTimeout
+	}
+
 	select {
 	case channel := <-cp.channels:
 		if channel.IsClosed() {
 			// Create new channel if borrowed one is closed
-			return cp.createChannel()
+			cp.mu.Lock()
+			newChannel, err := cp.createChannel()
+			cp.mu.Unlock()
+			return newChannel, err
 		}
 		return channel, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(cp.config.BorrowTimeout):
+	case <-time.After(borrowTimeout):
 		return nil, messaging.NewError(messaging.ErrorCodeChannel, "borrow_channel", "timeout waiting for channel")
 	}
 }
 
 // Return returns a channel to the pool.
 func (cp *ChannelPool) Return(channel *amqp091.Channel) {
-	if channel == nil || channel.IsClosed() {
+	if channel == nil || channel.IsClosed() || cp.closed || cp.channels == nil {
 		return
 	}
 
@@ -542,6 +900,11 @@ func (cp *ChannelPool) createChannel() (*amqp091.Channel, error) {
 		channel.Close()
 		return nil, err
 	}
+
+	// Track the channel with proper synchronization
+	cp.mu.Lock()
+	cp.allChannels[channel] = true
+	cp.mu.Unlock()
 
 	return channel, nil
 }
@@ -568,8 +931,13 @@ func (cp *ChannelPool) Close() error {
 	cp.closed = true
 	close(cp.channels)
 
-	// Close all channels
+	// Close all channels in the pool
 	for channel := range cp.channels {
+		channel.Close()
+	}
+
+	// Close all tracked channels
+	for channel := range cp.allChannels {
 		channel.Close()
 	}
 
@@ -581,15 +949,18 @@ type PooledTransport struct {
 	*Transport
 	connPool  *ConnectionPool
 	chanPools map[*amqp091.Connection]*ChannelPool
-	mu        sync.RWMutex
+	// Track which connection each channel belongs to
+	channelToConn map[*amqp091.Channel]*amqp091.Connection
+	mu            sync.RWMutex
 }
 
 // NewPooledTransport creates a new pooled transport.
 func NewPooledTransport(config *messaging.RabbitMQConfig, observability *messaging.ObservabilityContext) *PooledTransport {
 	return &PooledTransport{
-		Transport: NewTransport(config, observability),
-		connPool:  NewConnectionPool(config.ConnectionPool, observability.Logger(), observability.Metrics()),
-		chanPools: make(map[*amqp091.Connection]*ChannelPool),
+		Transport:     NewTransport(config, observability),
+		connPool:      NewConnectionPool(config.ConnectionPool, observability.Logger(), observability.Metrics()),
+		chanPools:     make(map[*amqp091.Connection]*ChannelPool),
+		channelToConn: make(map[*amqp091.Channel]*amqp091.Connection),
 	}
 }
 
@@ -620,19 +991,41 @@ func (pt *PooledTransport) GetChannel(ctx context.Context) (*amqp091.Channel, er
 	pt.mu.Unlock()
 
 	// Borrow channel from pool
-	return chanPool.Borrow(ctx)
+	channel, err := chanPool.Borrow(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Track the channel's connection
+	pt.mu.Lock()
+	pt.channelToConn[channel] = conn
+	pt.mu.Unlock()
+
+	return channel, nil
 }
 
 // ReturnChannel returns a channel to the pool.
 func (pt *PooledTransport) ReturnChannel(channel *amqp091.Channel) {
-	// Find the channel pool for this channel's connection
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
 
-	for _, chanPool := range pt.chanPools {
-		chanPool.Return(channel)
-		break // Return to first pool for now
+	conn, ok := pt.channelToConn[channel]
+	if !ok {
+		// Channel not found in tracking map, skip return
+		return
 	}
+
+	// Find the channel pool for this channel's connection
+	chanPool, exists := pt.chanPools[conn]
+	if !exists {
+		// Channel pool not found, skip return
+		return
+	}
+
+	chanPool.Return(channel)
+
+	// Remove the channel from the map after returning
+	delete(pt.channelToConn, channel)
 }
 
 // Close closes the pooled transport.
@@ -642,6 +1035,8 @@ func (pt *PooledTransport) Close(ctx context.Context) error {
 	for _, chanPool := range pt.chanPools {
 		chanPool.Close()
 	}
+	// Clear the channel tracking map
+	pt.channelToConn = make(map[*amqp091.Channel]*amqp091.Connection)
 	pt.mu.Unlock()
 
 	// Close connection pool

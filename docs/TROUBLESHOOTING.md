@@ -112,9 +112,10 @@ tail -f /var/log/rabbitmq/rabbit@hostname.log
 ```go
 // Check publisher stats
 stats := publisher.GetStats()
-log.Printf("Tasks Queued: %d", stats.TasksQueued)
-log.Printf("Tasks Dropped: %d", stats.TasksDropped)
-log.Printf("Tasks Processed: %d", stats.TasksProcessed)
+logx.Info("Publisher stats", 
+    logx.Int("tasks_queued", stats.TasksQueued),
+    logx.Int("tasks_dropped", stats.TasksDropped),
+    logx.Int("tasks_processed", stats.TasksProcessed))
 ```
 
 **Solutions:**
@@ -146,7 +147,7 @@ log.Printf("Tasks Processed: %d", stats.TasksProcessed)
    <-receipt.Done()
    result, err := receipt.Result()
    if err != nil {
-       log.Printf("Publish failed: %v", err)
+       logx.Error("Publish failed", logx.Error(err))
    }
    ```
 
@@ -208,9 +209,10 @@ log.Printf("Tasks Processed: %d", stats.TasksProcessed)
 ```go
 // Check consumer stats
 stats := consumer.GetStats()
-log.Printf("Messages Processed: %d", stats.MessagesProcessed)
-log.Printf("Messages Failed: %d", stats.MessagesFailed)
-log.Printf("Active Workers: %d", stats.ActiveWorkers)
+logx.Info("Consumer stats", 
+    logx.Int("messages_processed", stats.MessagesProcessed),
+    logx.Int("messages_failed", stats.MessagesFailed),
+    logx.Int("active_workers", stats.ActiveWorkers))
 ```
 
 **Solutions:**
@@ -239,12 +241,12 @@ log.Printf("Active Workers: %d", stats.ActiveWorkers)
    ```go
    handler := messaging.HandlerFunc(func(ctx context.Context, delivery messaging.Delivery) (messaging.AckDecision, error) {
        // Add logging to debug
-       log.Printf("Processing message: %s", delivery.Message.ID)
+       logx.Info("Processing message", logx.String("message_id", delivery.Message.ID))
        
        // Process message
        err := processMessage(delivery.Message)
        if err != nil {
-           log.Printf("Handler error: %v", err)
+           logx.Error("Handler error", logx.Error(err))
            return messaging.Reject, err
        }
        
@@ -297,9 +299,10 @@ log.Printf("Active Workers: %d", stats.ActiveWorkers)
 ```go
 // Monitor performance metrics
 metrics := monitor.GetMetrics()
-log.Printf("Throughput: %.2f msg/sec", metrics.TotalThroughput)
-log.Printf("Latency P95: %d ns", metrics.PublishLatencyP95)
-log.Printf("Memory Usage: %d MB", metrics.MemoryUsageMB)
+logx.Info("Performance metrics", 
+    logx.Float64("throughput_msg_per_sec", metrics.TotalThroughput),
+    logx.Int64("latency_p95_ns", metrics.PublishLatencyP95),
+    logx.Int("memory_usage_mb", metrics.MemoryUsageMB))
 ```
 
 **Solutions:**
@@ -399,7 +402,7 @@ log.Printf("Memory Usage: %d MB", metrics.MemoryUsageMB)
    ```go
    // Validate configuration before use
    if err := config.Validate(); err != nil {
-       log.Fatalf("Invalid configuration: %v", err)
+       logx.Fatal("Invalid configuration", logx.Error(err))
    }
    ```
 
@@ -434,13 +437,13 @@ log.Printf("Memory Usage: %d MB", metrics.MemoryUsageMB)
    // Load from file
    config, err := configloader.LoadFromFile("config.yaml")
    if err != nil {
-       log.Fatalf("Failed to load config: %v", err)
+       logx.Fatal("Failed to load config", logx.Error(err))
    }
    
    // Load from environment
    config, err := configloader.LoadFromEnvironment()
    if err != nil {
-       log.Fatalf("Failed to load config: %v", err)
+       logx.Fatal("Failed to load config", logx.Error(err))
    }
    ```
 
@@ -459,7 +462,7 @@ log.Printf("Memory Usage: %d MB", metrics.MemoryUsageMB)
    var connErr *messaging.MessagingError
    if errors.As(err, &connErr) && connErr.Code == messaging.ErrorCodeConnection {
        // Handle connection error
-       log.Printf("Connection error: %v", err)
+       logx.Error("Connection error", logx.Error(err))
    }
    ```
 
@@ -468,7 +471,7 @@ log.Printf("Memory Usage: %d MB", metrics.MemoryUsageMB)
    var publishErr *messaging.MessagingError
    if errors.As(err, &publishErr) && publishErr.Code == messaging.ErrorCodePublish {
        // Handle publish error
-       log.Printf("Publish error: %v", err)
+       logx.Error("Publish error", logx.Error(err))
    }
    ```
 
@@ -477,7 +480,7 @@ log.Printf("Memory Usage: %d MB", metrics.MemoryUsageMB)
    var timeoutErr *messaging.MessagingError
    if errors.As(err, &timeoutErr) && timeoutErr.Code == messaging.ErrorCodeTimeout {
        // Handle timeout error
-       log.Printf("Timeout error: %v", err)
+       logx.Error("Timeout error", logx.Error(err))
    }
    ```
 
@@ -568,7 +571,7 @@ healthManager.AddCheck("publisher_health", func() messaging.HealthStatus {
 // Get health report
 report := healthManager.GetHealthReport()
 if report.Status != messaging.HealthStatusHealthy {
-    log.Printf("Health check failed: %v", report)
+    logx.Error("Health check failed", logx.Any("report", report))
 }
 ```
 
@@ -587,9 +590,10 @@ defer monitor.Close(ctx)
 
 // Get performance metrics
 metrics := monitor.GetMetrics()
-log.Printf("Throughput: %.2f msg/sec", metrics.TotalThroughput)
-log.Printf("Latency P95: %d ns", metrics.PublishLatencyP95)
-log.Printf("Memory Usage: %d MB", metrics.MemoryUsageMB)
+logx.Info("Performance metrics", 
+    logx.Float64("throughput_msg_per_sec", metrics.TotalThroughput),
+    logx.Int64("latency_p95_ns", metrics.PublishLatencyP95),
+    logx.Int("memory_usage_mb", metrics.MemoryUsageMB))
 ```
 
 ## Monitoring and Metrics

@@ -4,6 +4,7 @@ package messaging
 import (
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // Common error variables
@@ -58,6 +59,9 @@ var (
 
 	// ErrInvalidAckDecision is returned when an invalid ack decision is provided.
 	ErrInvalidAckDecision = errors.New("invalid ack decision")
+
+	// ErrInvalidErrorCode is returned when an invalid error code is provided.
+	ErrInvalidErrorCode = errors.New("invalid error code")
 )
 
 // ErrorCode represents an error code for categorizing errors.
@@ -110,6 +114,30 @@ const (
 	ErrorCodeInternal ErrorCode = "INTERNAL"
 )
 
+// ValidErrorCodes contains all valid error codes for validation.
+var ValidErrorCodes = map[ErrorCode]bool{
+	ErrorCodeTransport:      true,
+	ErrorCodeConfiguration:  true,
+	ErrorCodeConnection:     true,
+	ErrorCodeChannel:        true,
+	ErrorCodePublish:        true,
+	ErrorCodeConsume:        true,
+	ErrorCodeSerialization:  true,
+	ErrorCodeValidation:     true,
+	ErrorCodeTimeout:        true,
+	ErrorCodeBackpressure:   true,
+	ErrorCodePersistence:    true,
+	ErrorCodeDLQ:            true,
+	ErrorCodeTransformation: true,
+	ErrorCodeRouting:        true,
+	ErrorCodeInternal:       true,
+}
+
+// IsValidErrorCode checks if the given error code is valid.
+func IsValidErrorCode(code ErrorCode) bool {
+	return ValidErrorCodes[code]
+}
+
 // MessagingError represents a structured error with additional context.
 type MessagingError struct {
 	// Code categorizes the error.
@@ -125,7 +153,8 @@ type MessagingError struct {
 	Cause error
 
 	// Context provides additional context information.
-	Context map[string]interface{}
+	// Using sync.Map for thread-safe access.
+	Context *sync.Map
 
 	// Retryable indicates whether the operation can be retried.
 	Retryable bool
@@ -136,6 +165,9 @@ type MessagingError struct {
 
 // Error implements the error interface.
 func (e *MessagingError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
 	if e.Cause != nil {
 		return fmt.Sprintf("%s: %s: %v", e.Code, e.Message, e.Cause)
 	}
@@ -144,11 +176,17 @@ func (e *MessagingError) Error() string {
 
 // Unwrap returns the underlying error.
 func (e *MessagingError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.Cause
 }
 
 // Is checks if the error matches the target error.
 func (e *MessagingError) Is(target error) bool {
+	if e == nil {
+		return false
+	}
 	if e.Cause != nil {
 		return errors.Is(e.Cause, target)
 	}
@@ -157,41 +195,99 @@ func (e *MessagingError) Is(target error) bool {
 
 // WithContext adds context information to the error.
 func (e *MessagingError) WithContext(key string, value interface{}) *MessagingError {
-	if e.Context == nil {
-		e.Context = make(map[string]interface{})
+	if e == nil {
+		return nil
 	}
-	e.Context[key] = value
+	if e.Context == nil {
+		e.Context = &sync.Map{}
+	}
+	e.Context.Store(key, value)
 	return e
+}
+
+// WithContextSafe creates a new error with additional context information.
+// This method is thread-safe as it doesn't modify the original error.
+func (e *MessagingError) WithContextSafe(key string, value interface{}) *MessagingError {
+	if e == nil {
+		return nil
+	}
+
+	// Create a copy of the error
+	newErr := &MessagingError{
+		Code:      e.Code,
+		Operation: e.Operation,
+		Message:   e.Message,
+		Cause:     e.Cause,
+		Retryable: e.Retryable,
+		Temporary: e.Temporary,
+		Context:   &sync.Map{},
+	}
+
+	// Copy existing context
+	if e.Context != nil {
+		e.Context.Range(func(k, v interface{}) bool {
+			newErr.Context.Store(k, v)
+			return true
+		})
+	}
+
+	// Add new context
+	newErr.Context.Store(key, value)
+	return newErr
 }
 
 // NewError creates a new MessagingError.
 func NewError(code ErrorCode, operation, message string) *MessagingError {
+	if !IsValidErrorCode(code) {
+		code = ErrorCodeInternal
+	}
+	if operation == "" {
+		operation = "unknown"
+	}
+	if message == "" {
+		message = "no error message provided"
+	}
 	return &MessagingError{
 		Code:      code,
 		Operation: operation,
 		Message:   message,
-		Context:   make(map[string]interface{}),
+		Context:   &sync.Map{},
 	}
 }
 
 // NewErrorf creates a new MessagingError with formatted message.
 func NewErrorf(code ErrorCode, operation, format string, args ...interface{}) *MessagingError {
+	if format == "" {
+		return NewError(code, operation, "no error message provided")
+	}
 	return NewError(code, operation, fmt.Sprintf(format, args...))
 }
 
 // WrapError wraps an existing error with MessagingError.
 func WrapError(code ErrorCode, operation, message string, cause error) *MessagingError {
+	if !IsValidErrorCode(code) {
+		code = ErrorCodeInternal
+	}
+	if operation == "" {
+		operation = "unknown"
+	}
+	if message == "" {
+		message = "no error message provided"
+	}
 	return &MessagingError{
 		Code:      code,
 		Operation: operation,
 		Message:   message,
 		Cause:     cause,
-		Context:   make(map[string]interface{}),
+		Context:   &sync.Map{},
 	}
 }
 
 // WrapErrorf wraps an existing error with MessagingError and formatted message.
 func WrapErrorf(code ErrorCode, operation string, cause error, format string, args ...interface{}) *MessagingError {
+	if format == "" {
+		return WrapError(code, operation, "no error message provided", cause)
+	}
 	return WrapError(code, operation, fmt.Sprintf(format, args...), cause)
 }
 
@@ -225,9 +321,109 @@ func GetErrorCode(err error) ErrorCode {
 // GetErrorContext extracts context information from an error.
 func GetErrorContext(err error) map[string]interface{} {
 	var msgErr *MessagingError
-	if errors.As(err, &msgErr) {
-		return msgErr.Context
+	if errors.As(err, &msgErr) && msgErr != nil {
+		if msgErr.Context == nil {
+			return make(map[string]interface{})
+		}
+		contextMap := make(map[string]interface{})
+		msgErr.Context.Range(func(k, v interface{}) bool {
+			if key, ok := k.(string); ok {
+				contextMap[key] = v
+			}
+			return true
+		})
+		return contextMap
 	}
+	return make(map[string]interface{})
+}
+
+// GetContextValue safely retrieves a specific context value from an error.
+func GetContextValue(err error, key string) (interface{}, bool) {
+	var msgErr *MessagingError
+	if errors.As(err, &msgErr) && msgErr != nil && msgErr.Context != nil {
+		return msgErr.Context.Load(key)
+	}
+	return nil, false
+}
+
+// GetContextString safely retrieves a string context value from an error.
+func GetContextString(err error, key string) (string, bool) {
+	if value, ok := GetContextValue(err, key); ok {
+		if str, ok := value.(string); ok {
+			return str, true
+		}
+	}
+	return "", false
+}
+
+// GetContextInt safely retrieves an int context value from an error.
+func GetContextInt(err error, key string) (int, bool) {
+	if value, ok := GetContextValue(err, key); ok {
+		if i, ok := value.(int); ok {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// GetContextBool safely retrieves a bool context value from an error.
+func GetContextBool(err error, key string) (bool, bool) {
+	if value, ok := GetContextValue(err, key); ok {
+		if b, ok := value.(bool); ok {
+			return b, true
+		}
+	}
+	return false, false
+}
+
+// GetRootCause returns the deepest underlying error in the error chain.
+func GetRootCause(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var root error = err
+	for {
+		if unwrapped := errors.Unwrap(root); unwrapped != nil {
+			root = unwrapped
+		} else {
+			break
+		}
+	}
+	return root
+}
+
+// GetErrorChain returns all errors in the chain as a slice.
+func GetErrorChain(err error) []error {
+	if err == nil {
+		return nil
+	}
+
+	var chain []error
+	current := err
+	for current != nil {
+		chain = append(chain, current)
+		current = errors.Unwrap(current)
+	}
+	return chain
+}
+
+// FindErrorByCode searches the error chain for an error with the specified code.
+func FindErrorByCode(err error, code ErrorCode) *MessagingError {
+	if err == nil {
+		return nil
+	}
+
+	var msgErr *MessagingError
+	if errors.As(err, &msgErr) && msgErr != nil && msgErr.Code == code {
+		return msgErr
+	}
+
+	// Check the cause
+	if cause := errors.Unwrap(err); cause != nil {
+		return FindErrorByCode(cause, code)
+	}
+
 	return nil
 }
 
@@ -308,4 +504,176 @@ func BackpressureError(operation string) *MessagingError {
 	err.Temporary = true
 	err.Retryable = true
 	return err
+}
+
+// NewImmutableError creates a new MessagingError that cannot be modified after creation.
+// This is useful for creating error constants or when you want to ensure thread safety.
+func NewImmutableError(code ErrorCode, operation, message string) *MessagingError {
+	if !IsValidErrorCode(code) {
+		code = ErrorCodeInternal
+	}
+	if operation == "" {
+		operation = "unknown"
+	}
+	if message == "" {
+		message = "no error message provided"
+	}
+	return &MessagingError{
+		Code:      code,
+		Operation: operation,
+		Message:   message,
+		Context:   &sync.Map{},
+		Retryable: false,
+		Temporary: false,
+	}
+}
+
+// WrapImmutableError creates an immutable error that wraps an existing error.
+func WrapImmutableError(code ErrorCode, operation, message string, cause error) *MessagingError {
+	if !IsValidErrorCode(code) {
+		code = ErrorCodeInternal
+	}
+	if operation == "" {
+		operation = "unknown"
+	}
+	if message == "" {
+		message = "no error message provided"
+	}
+	return &MessagingError{
+		Code:      code,
+		Operation: operation,
+		Message:   message,
+		Cause:     cause,
+		Context:   &sync.Map{},
+		Retryable: false,
+		Temporary: false,
+	}
+}
+
+// ValidateErrorCode validates an error code and returns an error if invalid.
+func ValidateErrorCode(code ErrorCode) error {
+	if !IsValidErrorCode(code) {
+		return fmt.Errorf("%w: %s", ErrInvalidErrorCode, code)
+	}
+	return nil
+}
+
+// SetRetryable marks an error as retryable.
+func (e *MessagingError) SetRetryable(retryable bool) *MessagingError {
+	if e == nil {
+		return nil
+	}
+	e.Retryable = retryable
+	return e
+}
+
+// SetTemporary marks an error as temporary.
+func (e *MessagingError) SetTemporary(temporary bool) *MessagingError {
+	if e == nil {
+		return nil
+	}
+	e.Temporary = temporary
+	return e
+}
+
+// HasErrorCode checks if the error chain contains an error with the specified code.
+func HasErrorCode(err error, code ErrorCode) bool {
+	return FindErrorByCode(err, code) != nil
+}
+
+// HasErrorType checks if the error chain contains an error of the specified type.
+func HasErrorType(err error, target error) bool {
+	return errors.Is(err, target)
+}
+
+// CountErrorsInChain returns the number of errors in the error chain.
+func CountErrorsInChain(err error) int {
+	if err == nil {
+		return 0
+	}
+
+	count := 0
+	current := err
+	for current != nil {
+		count++
+		current = errors.Unwrap(current)
+	}
+	return count
+}
+
+// GetFirstMessagingError returns the first MessagingError in the error chain.
+func GetFirstMessagingError(err error) *MessagingError {
+	if err == nil {
+		return nil
+	}
+
+	var msgErr *MessagingError
+	if errors.As(err, &msgErr) {
+		return msgErr
+	}
+
+	// Check the cause
+	if cause := errors.Unwrap(err); cause != nil {
+		return GetFirstMessagingError(cause)
+	}
+
+	return nil
+}
+
+// GetLastMessagingError returns the last MessagingError in the error chain.
+func GetLastMessagingError(err error) *MessagingError {
+	if err == nil {
+		return nil
+	}
+
+	var lastMsgErr *MessagingError
+	current := err
+
+	for current != nil {
+		var msgErr *MessagingError
+		if errors.As(current, &msgErr) {
+			lastMsgErr = msgErr
+		}
+		current = errors.Unwrap(current)
+	}
+
+	return lastMsgErr
+}
+
+// IsRetryableError checks if any error in the chain is retryable.
+func IsRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var msgErr *MessagingError
+	if errors.As(err, &msgErr) && msgErr != nil && msgErr.Retryable {
+		return true
+	}
+
+	// Check the cause
+	if cause := errors.Unwrap(err); cause != nil {
+		return IsRetryableError(cause)
+	}
+
+	return false
+}
+
+// IsTemporaryError checks if any error in the chain is temporary.
+func IsTemporaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var msgErr *MessagingError
+	if errors.As(err, &msgErr) && msgErr != nil && msgErr.Temporary {
+		return true
+	}
+
+	// Check the cause
+	if cause := errors.Unwrap(err); cause != nil {
+		return IsTemporaryError(cause)
+	}
+
+	return false
 }

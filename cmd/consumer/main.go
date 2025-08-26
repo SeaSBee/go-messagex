@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -43,10 +44,35 @@ func (cli *ConsumerCLI) parseFlags() {
 	flag.BoolVar(&cli.help, "help", false, "Show help")
 	flag.Parse()
 
+	// Validate input parameters
+	if err := cli.validateParams(); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid parameters: %v\n", err)
+		os.Exit(1)
+	}
+
 	if cli.help {
 		cli.showHelp()
 		os.Exit(0)
 	}
+}
+
+func (cli *ConsumerCLI) validateParams() error {
+	if cli.queue == "" {
+		return fmt.Errorf("queue name cannot be empty")
+	}
+	if cli.prefetch <= 0 {
+		return fmt.Errorf("prefetch count must be positive")
+	}
+	if cli.concurrency <= 0 {
+		return fmt.Errorf("concurrency must be positive")
+	}
+	if cli.timeout <= 0 {
+		return fmt.Errorf("timeout must be positive")
+	}
+	if cli.failureRate < 0.0 || cli.failureRate > 1.0 {
+		return fmt.Errorf("failure rate must be between 0.0 and 1.0")
+	}
+	return nil
 }
 
 func (cli *ConsumerCLI) showHelp() {
@@ -99,6 +125,11 @@ func (cli *ConsumerCLI) loadConfig() (*messaging.Config, error) {
 		}
 	}
 
+	// Ensure config is not nil
+	if config == nil {
+		config = &messaging.Config{}
+	}
+
 	// Set defaults if not configured
 	if config.Transport == "" {
 		config.Transport = "rabbitmq"
@@ -143,24 +174,29 @@ func (cli *ConsumerCLI) loadConfig() (*messaging.Config, error) {
 
 func (cli *ConsumerCLI) createMessageHandler() messaging.Handler {
 	return messaging.HandlerFunc(func(ctx context.Context, delivery messaging.Delivery) (messaging.AckDecision, error) {
-		// Increment processed count
-		cli.processedCount++
+		// Increment processed count atomically
+		processedCount := atomic.AddInt64(&cli.processedCount, 1)
 
 		// Log message details
 		logx.Info("Processing message",
 			logx.String("message_id", delivery.Message.ID),
 			logx.String("queue", cli.queue),
-			logx.Int("processed_count", int(cli.processedCount)),
+			logx.Int("processed_count", int(processedCount)),
 			logx.String("routing_key", delivery.Message.Key),
 			logx.Int("priority", int(delivery.Message.Priority)),
 		)
 
-		// Simulate processing time
-		processingTime := time.Duration(10+delivery.Message.ID[0]%50) * time.Millisecond
+		// Calculate processing time with nil check for message ID
+		var processingTime time.Duration
+		if delivery.Message.ID != "" {
+			processingTime = time.Duration(10+delivery.Message.ID[0]%50) * time.Millisecond
+		} else {
+			processingTime = time.Duration(10+processedCount%50) * time.Millisecond
+		}
 		time.Sleep(processingTime)
 
 		// Simulate failures based on failure rate
-		if cli.failureRate > 0 && float64(cli.processedCount%100) < cli.failureRate*100 {
+		if cli.failureRate > 0 && float64(processedCount%100) < cli.failureRate*100 {
 			logx.Error("Simulated failure",
 				logx.String("message_id", delivery.Message.ID),
 				logx.String("error", fmt.Sprintf("simulated failure for message %s", delivery.Message.ID)),
@@ -169,7 +205,7 @@ func (cli *ConsumerCLI) createMessageHandler() messaging.Handler {
 		}
 
 		// Simulate panic occasionally
-		if cli.processedCount%1000 == 0 && cli.failureRate > 0.1 {
+		if processedCount%1000 == 0 && cli.failureRate > 0.1 {
 			logx.Error("Simulated panic",
 				logx.String("message_id", delivery.Message.ID),
 				logx.String("error", "simulated panic"),
@@ -179,12 +215,17 @@ func (cli *ConsumerCLI) createMessageHandler() messaging.Handler {
 
 		// Echo message details
 		fmt.Printf("✅ Processed message %s (count: %d, time: %v)\n",
-			delivery.Message.ID, cli.processedCount, processingTime)
+			delivery.Message.ID, processedCount, processingTime)
 
-		// Log message body if it's JSON
+		// Log message body if it's JSON with proper error handling
 		if strings.HasPrefix(delivery.Message.ContentType, "application/json") {
 			var data map[string]interface{}
-			if err := json.Unmarshal(delivery.Message.Body, &data); err == nil {
+			if err := json.Unmarshal(delivery.Message.Body, &data); err != nil {
+				logx.Warn("Failed to unmarshal JSON message body",
+					logx.String("message_id", delivery.Message.ID),
+					logx.String("error", err.Error()),
+				)
+			} else {
 				logx.Debug("Message body",
 					logx.String("message_id", delivery.Message.ID),
 					logx.Any("body", data),
@@ -232,21 +273,26 @@ func (cli *ConsumerCLI) runInteractive() error {
 		return err
 	}
 
-	// Initialize logging
-	if err := logx.InitDefault(); err != nil {
-		return fmt.Errorf("failed to initialize logger: %w", err)
-	}
-	defer logx.Sync()
+	// Logging is already initialized in main()
 
 	// Create transport factory
 	factory := &rabbitmq.TransportFactory{}
 
-	// Create consumer
-	consumer, err := factory.NewConsumer(context.Background(), config)
+	// Create cancellable context for the consumer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create consumer with proper context
+	consumer, err := factory.NewConsumer(ctx, config)
 	if err != nil {
 		return fmt.Errorf("failed to create consumer: %w", err)
 	}
-	defer consumer.Stop(context.Background())
+	defer func() {
+		// Use a timeout context for stopping the consumer
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		consumer.Stop(stopCtx)
+	}()
 
 	// Create message handler
 	handler := cli.createMessageHandler()
@@ -258,39 +304,63 @@ func (cli *ConsumerCLI) runInteractive() error {
 	fmt.Println()
 
 	// Start consumer
-	err = consumer.Start(context.Background(), handler)
+	err = consumer.Start(ctx, handler)
 	if err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}
 
 	fmt.Println("Consumer started. Type 'help' for commands.")
 
-	for {
-		fmt.Print("consumer> ")
-		var input string
-		fmt.Scanln(&input)
+	// Set up graceful shutdown for interactive mode
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-		parts := strings.Fields(input)
-		if len(parts) == 0 {
-			continue
+	// Create a channel for user input
+	inputChan := make(chan string, 1)
+	go func() {
+		for {
+			fmt.Print("consumer> ")
+			var input string
+			if _, err := fmt.Scanln(&input); err != nil {
+				// Handle EOF or other input errors
+				inputChan <- "quit"
+				return
+			}
+			inputChan <- input
 		}
+	}()
 
-		command := parts[0]
+	for {
+		select {
+		case input := <-inputChan:
+			parts := strings.Fields(input)
+			if len(parts) == 0 {
+				continue
+			}
 
-		switch command {
-		case "help":
-			cli.showInteractiveHelp()
-		case "quit", "exit":
-			fmt.Println("Stopping consumer...")
+			command := parts[0]
+
+			switch command {
+			case "help":
+				cli.showInteractiveHelp()
+			case "quit", "exit":
+				fmt.Println("Stopping consumer...")
+				return nil
+			case "stats":
+				cli.showStats(consumer)
+			case "config":
+				cli.showConfig(config)
+			case "clear":
+				fmt.Print("\033[H\033[2J") // Clear screen
+			default:
+				fmt.Printf("Unknown command: %s. Type 'help' for available commands.\n", command)
+			}
+		case <-sigChan:
+			fmt.Println("\n🛑 Shutting down...")
 			return nil
-		case "stats":
-			cli.showStats(consumer)
-		case "config":
-			cli.showConfig(config)
-		case "clear":
-			fmt.Print("\033[H\033[2J") // Clear screen
-		default:
-			fmt.Printf("Unknown command: %s. Type 'help' for available commands.\n", command)
+		case <-ctx.Done():
+			fmt.Println("Context cancelled, shutting down...")
+			return nil
 		}
 	}
 }
@@ -348,29 +418,31 @@ func (cli *ConsumerCLI) runBatch() error {
 		return err
 	}
 
-	// Initialize logging
-	if err := logx.InitDefault(); err != nil {
-		return fmt.Errorf("failed to initialize logger: %w", err)
-	}
-	defer logx.Sync()
+	// Logging is already initialized in main()
 
 	// Create transport factory
 	factory := &rabbitmq.TransportFactory{}
 
-	// Create consumer
-	consumer, err := factory.NewConsumer(context.Background(), config)
+	// Create cancellable context for the consumer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create consumer with proper context
+	consumer, err := factory.NewConsumer(ctx, config)
 	if err != nil {
 		return fmt.Errorf("failed to create consumer: %w", err)
 	}
-	defer consumer.Stop(context.Background())
+	defer func() {
+		// Use a timeout context for stopping the consumer
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		consumer.Stop(stopCtx)
+	}()
 
 	// Create message handler
 	handler := cli.createMessageHandler()
 
 	// Set up graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -400,7 +472,7 @@ func (cli *ConsumerCLI) runBatch() error {
 	<-ctx.Done()
 
 	fmt.Printf("\n📊 Final Statistics:\n")
-	fmt.Printf("  Total Messages Processed: %d\n", cli.processedCount)
+	fmt.Printf("  Total Messages Processed: %d\n", atomic.LoadInt64(&cli.processedCount))
 
 	// Show consumer stats if available
 	if concurrentConsumer, ok := consumer.(*rabbitmq.ConcurrentConsumer); ok {
@@ -423,7 +495,7 @@ func (cli *ConsumerCLI) reportStats(consumer messaging.Consumer) {
 				stats.MessagesProcessed, stats.MessagesFailed, stats.MessagesRequeued,
 				stats.MessagesSentToDLQ, stats.ActiveWorkers, stats.QueuedTasks)
 		} else {
-			fmt.Printf("📊 Stats: Processed=%d\n", cli.processedCount)
+			fmt.Printf("📊 Stats: Processed=%d\n", atomic.LoadInt64(&cli.processedCount))
 		}
 	}
 }
@@ -431,6 +503,13 @@ func (cli *ConsumerCLI) reportStats(consumer messaging.Consumer) {
 func main() {
 	cli := &ConsumerCLI{}
 	cli.parseFlags()
+
+	// Initialize logging at the start
+	if err := logx.InitDefault(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer logx.Sync()
 
 	if cli.interactive {
 		if err := cli.runInteractive(); err != nil {

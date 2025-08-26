@@ -1,127 +1,219 @@
 # go-messagex CLI Configuration Example
 # This file demonstrates configuration file support for the CLI applications
+# All fields are validated according to the configuration schema
 
-transport: "rabbitmq"
+# Transport configuration (required)
+transport: "rabbitmq"  # Options: rabbitmq, kafka (future)
 
+# RabbitMQ-specific configuration (required when transport is "rabbitmq")
 rabbitmq:
-  # Connection URIs (can be overridden by environment variables)
+  # Connection URIs (required, at least one)
+  # Can be overridden by environment variable MSG_RABBITMQ_URIS
   uris:
     - "amqp://localhost:5672/"
-    - "amqp://localhost:5673/"  # Fallback URI
+    - "amqps://user:pass@rmq-1:5671/vhost"  # Fallback URI with TLS
+    - "amqps://user:pass@rmq-2:5671/vhost"  # Additional fallback
   
-  # Connection pool settings
+  # Connection pool settings (optional, defaults applied)
   connectionPool:
-    min: 2
-    max: 8
-    healthCheckInterval: 30s
-    connectionTimeout: 10s
-    heartbeatInterval: 10s
+    min: 2                    # Minimum connections (1-100, default: 2)
+    max: 8                    # Maximum connections (1-1000, default: 8)
+    healthCheckInterval: 30s  # Health check interval (1s-300s, default: 30s)
+    connectionTimeout: 10s    # Connection timeout (1s-60s, default: 10s)
+    heartbeatInterval: 10s    # Heartbeat interval (1s-60s, default: 10s)
   
-  # Channel pool settings
+  # Channel pool settings (optional, defaults applied)
   channelPool:
-    perConnectionMin: 10
-    perConnectionMax: 100
-    borrowTimeout: 5s
-    healthCheckInterval: 30s
+    perConnectionMin: 10      # Min channels per connection (1-1000, default: 10)
+    perConnectionMax: 100     # Max channels per connection (1-10000, default: 100)
+    borrowTimeout: 5s         # Channel borrow timeout (100ms-30s, default: 5s)
+    healthCheckInterval: 30s  # Channel health check interval (1s-300s, default: 30s)
   
-  # Publisher configuration
+  # Publisher configuration (optional, defaults applied)
   publisher:
-    confirms: true
-    mandatory: true
-    maxInFlight: 1000
-    dropOnOverflow: false
-    publishTimeout: 30s
-    workerCount: 4
+    confirms: true            # Enable publisher confirms (default: true)
+    mandatory: true           # Messages must be routable (default: true)
+    immediate: false          # Messages must be deliverable immediately (default: false)
+    maxInFlight: 10000       # Max unconfirmed messages (1-100000, default: 10000)
+    dropOnOverflow: false     # Drop messages when queue is full (default: false)
+    publishTimeout: 2s        # Publish timeout (100ms-60s, default: 2s)
+    workerCount: 4            # Publisher workers (1-100, default: 4)
+    
+    # Retry configuration (optional)
     retry:
-      maxAttempts: 3
-      baseBackoff: 100ms
-      maxBackoff: 1s
-      backoffMultiplier: 2.0
-      jitter: true
+      maxAttempts: 5          # Max retry attempts (1-100, default: 5)
+      baseBackoff: 100ms      # Base backoff (10ms-10s, default: 100ms)
+      maxBackoff: 5s          # Max backoff (100ms-60s, default: 5s)
+      backoffMultiplier: 2.0  # Backoff multiplier (1.0-10.0, default: 2.0)
+      jitter: true            # Enable jitter (default: true)
+    
+    # Serialization configuration (optional)
     serialization:
-      defaultContentType: "application/json"
-      compressionEnabled: false
-      compressionLevel: 6
+      defaultContentType: "application/json"  # Default content type
+      compressionEnabled: false               # Enable compression (default: false)
+      compressionLevel: 6                     # Compression level (1-9, default: 6)
   
-  # Consumer configuration
+  # Consumer configuration (optional, defaults applied)
   consumer:
-    queue: "demo.queue"
-    prefetch: 256
-    maxConcurrentHandlers: 512
-    handlerTimeout: 30s
-    requeueOnError: true
-    ackOnSuccess: true
-    autoAck: false
-    exclusive: false
-    noLocal: false
-    noWait: false
-    panicRecovery: true
-    maxRetries: 3
+    queue: "demo.queue"       # Queue to consume from (required if using consumer)
+    prefetch: 256             # Prefetch count (1-65535, default: 256)
+    maxConcurrentHandlers: 512 # Max concurrent handlers (1-10000, default: 512)
+    requeueOnError: true      # Requeue on error (default: true)
+    ackOnSuccess: true        # Ack on success (default: true)
+    autoAck: false            # Auto acknowledgment (default: false)
+    exclusive: false          # Exclusive consumer (default: false)
+    noLocal: false            # Exclude local messages (default: false)
+    noWait: false             # Don't wait for confirmation (default: false)
+    handlerTimeout: 30s       # Handler timeout (1s-300s, default: 30s)
+    panicRecovery: true       # Enable panic recovery (default: true)
+    maxRetries: 3             # Max retries before DLQ (0-100, default: 3)
+    args: {}                  # Consumer arguments (optional)
   
-  # Dead Letter Queue configuration
-  dlq:
-    enabled: true
-    exchange: "dlx.demo"
-    queue: "dlq.demo"
-    routingKey: "dlq"
-    maxRetries: 3
-    retryDelay: 5s
-    autoCreate: true
-  
-  # Topology configuration
+  # Topology configuration (optional)
   topology:
+    # Default dead letter exchange (optional)
+    deadLetterExchange: "dlx.demo"
+    autoCreateDeadLetter: true  # Auto-create DLQ exchange/queue (default: true)
+    
+    # Exchanges to declare (optional)
     exchanges:
       - name: "demo.exchange"
-        type: "direct"
-        durable: true
-        autoDelete: false
-        internal: false
-        arguments: {}
+        type: "direct"        # Options: direct, fanout, topic, headers
+        durable: true         # Survive broker restart (default: true)
+        autoDelete: false     # Delete when no queues bound (default: false)
+        internal: false       # Internal exchange (default: false)
+        noWait: false         # Don't wait for confirmation (default: false)
+        args: {}              # Exchange arguments (optional)
       
       - name: "dlx.demo"
         type: "direct"
         durable: true
         autoDelete: false
         internal: false
-        arguments: {}
+        noWait: false
+        args: {}
     
+    # Queues to declare (optional)
     queues:
       - name: "demo.queue"
-        durable: true
-        autoDelete: false
-        exclusive: false
-        arguments:
-          x-dead-letter-exchange: "dlx.demo"
-          x-dead-letter-routing-key: "dlq"
-          x-max-priority: 10
+        durable: true         # Survive broker restart (default: true)
+        autoDelete: false     # Delete when no consumers (default: false)
+        exclusive: false      # Exclusive to connection (default: false)
+        noWait: false         # Don't wait for confirmation (default: false)
+        priority: true        # Support priority messages (default: false)
+        maxPriority: 10       # Max priority level (1-255, default: 10)
+        deadLetterExchange: "dlx.demo"    # DLQ exchange (optional)
+        deadLetterRoutingKey: "dlq"       # DLQ routing key (optional)
+        args:
+          x-message-ttl: 86400000         # Message TTL (24 hours in ms)
+          x-max-length: 10000             # Max queue length
+          x-overflow: "drop-head"         # Overflow behavior
       
       - name: "dlq.demo"
         durable: true
         autoDelete: false
         exclusive: false
-        arguments: {}
+        noWait: false
+        priority: false
+        args:
+          x-message-ttl: 604800000        # 7 days TTL for DLQ messages
     
+    # Bindings between exchanges and queues (optional)
     bindings:
       - exchange: "demo.exchange"
         queue: "demo.queue"
-        key: "demo.key"
-        arguments: {}
+        key: "demo.key"       # Routing key
+        noWait: false         # Don't wait for confirmation (default: false)
+        args: {}              # Binding arguments (optional)
       
       - exchange: "dlx.demo"
         queue: "dlq.demo"
         key: "dlq"
-        arguments: {}
+        noWait: false
+        args: {}
+  
+  # TLS configuration (optional)
+  tls:
+    enabled: false            # Enable TLS (default: false)
+    caFile: "/etc/ssl/ca.pem"           # CA certificate file (optional)
+    certFile: "/etc/ssl/client.crt"     # Client certificate (required if enabled)
+    keyFile: "/etc/ssl/client.key"      # Client private key (required if enabled)
+    minVersion: "1.2"        # Min TLS version (1.2, 1.3, default: 1.2)
+    insecureSkipVerify: false # Skip certificate verification (default: false)
+    serverName: "rabbitmq.example.com"  # Expected server name (optional)
+  
+  # Security configuration (optional)
+  security:
+    hmacEnabled: false        # Enable HMAC signing (default: false)
+    hmacSecret: ""            # HMAC secret key (required if enabled, min 32 chars)
+    hmacAlgorithm: "sha256"   # HMAC algorithm (sha1, sha256, sha512, default: sha256)
+    verifyHostname: true      # Enable hostname verification (default: true)
+  
+  # Advanced features (optional)
+  
+  # Message persistence configuration
+  persistence:
+    enabled: true             # Enable message persistence (default: true)
+    storageType: "memory"     # Storage type (memory, disk, redis, default: memory)
+    storagePath: "./message-storage"  # Storage path for disk storage (default: ./message-storage)
+    maxStorageSize: 104857600 # Max storage size in bytes (100MB, 1MB-10GB, default: 100MB)
+    cleanupInterval: 1h       # Cleanup interval (1m-24h, default: 1h)
+    messageTTL: 24h           # Message TTL (1m-168h, default: 24h)
+  
+  # Dead letter queue configuration
+  dlq:
+    enabled: true             # Enable DLQ functionality (default: true)
+    exchange: "dlx.demo"      # DLQ exchange name (optional, default: dlx)
+    queue: "dlq.demo"         # DLQ queue name (optional, default: dlq)
+    routingKey: "dlq"         # DLQ routing key (optional, default: dlq)
+    maxRetries: 3             # Max retries before DLQ (0-100, default: 3)
+    retryDelay: 5s            # Retry delay (100ms-300s, default: 5s)
+    autoCreate: true          # Auto-create DLQ (default: true)
+  
+  # Message transformation configuration
+  transformation:
+    enabled: false            # Enable message transformation (default: false)
+    compressionEnabled: false # Enable compression (default: false)
+    compressionLevel: 6       # Compression level (1-9, default: 6)
+    serializationFormat: "json" # Format (json, protobuf, avro, default: json)
+    schemaValidation: false   # Enable schema validation (default: false)
+    schemaRegistryURL: ""     # Schema registry URL (optional)
+  
+  # Advanced routing configuration
+  routing:
+    enabled: false            # Enable advanced routing (default: false)
+    dynamicRouting: false     # Enable dynamic routing (default: false)
+    routingRules: []          # Routing rules (optional)
+    messageFiltering: false   # Enable message filtering (default: false)
+    filterRules: []           # Filter rules (optional)
 
-# Telemetry configuration
+# Telemetry configuration (optional)
 telemetry:
-  metricsEnabled: true
-  tracingEnabled: true
-  serviceName: "go-messagex-cli"
-  metrics:
-    port: 9090
-    path: "/metrics"
-  tracing:
-    endpoint: "http://localhost:14268/api/traces"
-    sampler:
-      type: "probabilistic"
-      param: 0.1
+  metricsEnabled: true        # Enable metrics collection (default: true)
+  tracingEnabled: true        # Enable distributed tracing (default: true)
+  otlpEndpoint: "http://localhost:4317"  # OpenTelemetry endpoint (optional)
+  serviceName: "go-messagex-cli"         # Service name (optional, default: go-messagex)
+  serviceVersion: "0.1.0"     # Service version (optional)
+
+# Environment Variables Reference:
+# MSG_TRANSPORT                    - Transport type (rabbitmq, kafka)
+# MSG_RABBITMQ_URIS                - RabbitMQ connection URIs (comma-separated)
+# MSG_RABBITMQ_CONNECTIONPOOL_MIN  - Connection pool minimum
+# MSG_RABBITMQ_CONNECTIONPOOL_MAX  - Connection pool maximum
+# MSG_RABBITMQ_CHANNELPOOL_PERCONNECTIONMIN - Channel pool min per connection
+# MSG_RABBITMQ_CHANNELPOOL_PERCONNECTIONMAX - Channel pool max per connection
+# MSG_RABBITMQ_PUBLISHER_CONFIRMS  - Enable publisher confirms
+# MSG_RABBITMQ_PUBLISHER_MANDATORY - Messages must be routable
+# MSG_RABBITMQ_PUBLISHER_MAXINFLIGHT - Max in-flight messages
+# MSG_RABBITMQ_PUBLISHER_WORKERCOUNT - Publisher worker count
+# MSG_RABBITMQ_CONSUMER_QUEUE      - Consumer queue name
+# MSG_RABBITMQ_CONSUMER_PREFETCH   - Consumer prefetch count
+# MSG_RABBITMQ_CONSUMER_MAXCONCURRENTHANDLERS - Max concurrent handlers
+# MSG_RABBITMQ_TLS_ENABLED         - Enable TLS
+# MSG_RABBITMQ_TLS_CERTFILE        - TLS certificate file
+# MSG_RABBITMQ_TLS_KEYFILE         - TLS private key file
+# MSG_RABBITMQ_SECURITY_HMACENABLED - Enable HMAC signing
+# MSG_RABBITMQ_SECURITY_HMACSECRET - HMAC secret key
+# MSG_TELEMETRY_METRICSENABLED     - Enable metrics
+# MSG_TELEMETRY_TRACINGENABLED     - Enable tracing
+# MSG_TELEMETRY_OTLPENDPOINT       - OpenTelemetry endpoint

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -32,6 +33,8 @@ type ConsumerWorker struct {
 	consumer *ConcurrentConsumer
 	taskChan chan *HandlerTask
 	done     chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
 	stats    *ConsumerWorkerStats
 }
 
@@ -58,9 +61,10 @@ type ConcurrentConsumer struct {
 	// Semaphore for controlling concurrency
 	semaphore chan struct{}
 
-	// Task distribution
+	// Task distribution - using round-robin approach
 	taskQueue     chan *HandlerTask
 	taskQueueSize int
+	currentWorker int32 // Atomic counter for round-robin distribution
 
 	// Message delivery
 	deliveries <-chan amqp091.Delivery
@@ -70,6 +74,8 @@ type ConcurrentConsumer struct {
 	mu      sync.RWMutex
 	closed  bool
 	started bool
+	ctx     context.Context
+	cancel  context.CancelFunc
 
 	// Statistics
 	stats *ConsumerStats
@@ -90,6 +96,14 @@ type ConsumerStats struct {
 
 // NewConcurrentConsumer creates a new concurrent consumer with worker pools
 func NewConcurrentConsumer(transport *Transport, config *messaging.ConsumerConfig, observability *messaging.ObservabilityContext) *ConcurrentConsumer {
+	// Validate input parameters
+	if transport == nil {
+		panic("transport cannot be nil")
+	}
+	if config == nil {
+		panic("config cannot be nil")
+	}
+
 	// Validate and set defaults
 	maxConcurrent := config.MaxConcurrentHandlers
 	if maxConcurrent <= 0 {
@@ -134,7 +148,15 @@ func (cc *ConcurrentConsumer) Start(ctx context.Context, handler messaging.Handl
 		return messaging.NewError(messaging.ErrorCodeConsume, "start", "consumer already started")
 	}
 
-	if !cc.transport.IsConnected() {
+	// Validate context and handler
+	if ctx == nil {
+		return messaging.NewError(messaging.ErrorCodeConsume, "start", "context cannot be nil")
+	}
+	if handler == nil {
+		return messaging.NewError(messaging.ErrorCodeConsume, "start", "handler cannot be nil")
+	}
+
+	if cc.transport == nil || !cc.transport.IsConnected() {
 		return messaging.NewError(messaging.ErrorCodeConnection, "start", "transport is not connected")
 	}
 
@@ -166,23 +188,25 @@ func (cc *ConcurrentConsumer) Start(ctx context.Context, handler messaging.Handl
 
 	cc.deliveries = deliveries
 
+	// Create context for the consumer
+	cc.ctx, cc.cancel = context.WithCancel(ctx)
+
 	// Create and start workers
 	if err := cc.startWorkers(); err != nil {
+		cc.cancel()
 		return messaging.WrapError(messaging.ErrorCodeConsume, "start", "failed to start workers", err)
 	}
 
 	// Start message delivery goroutine
-	go cc.deliverMessages(ctx, handler)
+	go cc.deliverMessages(cc.ctx, handler)
 
 	cc.started = true
 
-	if cc.observability != nil && cc.observability.Logger() != nil {
-		cc.observability.Logger().Info("concurrent consumer started",
-			logx.String("queue", cc.config.Queue),
-			logx.Int("max_concurrent", cc.config.MaxConcurrentHandlers),
-			logx.Int("prefetch", cc.config.Prefetch),
-			logx.Int("workers", len(cc.workers)))
-	}
+	cc.logInfo("concurrent consumer started",
+		logx.String("queue", cc.config.Queue),
+		logx.Int("max_concurrent", cc.config.MaxConcurrentHandlers),
+		logx.Int("prefetch", cc.config.Prefetch),
+		logx.Int("workers", len(cc.workers)))
 
 	return nil
 }
@@ -202,23 +226,26 @@ func (cc *ConcurrentConsumer) setupQoS() error {
 		return fmt.Errorf("failed to set QoS prefetch=%d: %w", prefetch, err)
 	}
 
-	if cc.observability != nil && cc.observability.Logger() != nil {
-		cc.observability.Logger().Debug("QoS configured",
-			logx.Int("prefetch", prefetch))
-	}
-
+	cc.logDebug("QoS configured", logx.Int("prefetch", prefetch))
 	return nil
 }
 
 // startWorkers creates and starts the worker pool
 func (cc *ConcurrentConsumer) startWorkers() error {
 	// Determine worker count based on concurrent handlers and CPU count
-	workerCount := cc.config.MaxConcurrentHandlers / 10 // 10 handlers per worker
+	// Use a more dynamic approach based on workload characteristics
+	workerCount := runtime.NumCPU()
+	if workerCount < 2 {
+		workerCount = 2
+	}
+
+	// Cap workers based on max concurrent handlers
+	maxWorkers := cc.config.MaxConcurrentHandlers / 5 // 5 handlers per worker
+	if maxWorkers < workerCount {
+		workerCount = maxWorkers
+	}
 	if workerCount < 1 {
 		workerCount = 1
-	}
-	if workerCount > runtime.NumCPU()*4 {
-		workerCount = runtime.NumCPU() * 4
 	}
 	if workerCount > 100 {
 		workerCount = 100
@@ -227,11 +254,14 @@ func (cc *ConcurrentConsumer) startWorkers() error {
 	cc.workers = make([]*ConsumerWorker, workerCount)
 
 	for i := 0; i < workerCount; i++ {
+		workerCtx, workerCancel := context.WithCancel(cc.ctx)
 		worker := &ConsumerWorker{
 			id:       i,
 			consumer: cc,
-			taskChan: make(chan *HandlerTask, 10), // Small buffer per worker
+			taskChan: make(chan *HandlerTask, 5), // Small buffer per worker
 			done:     make(chan struct{}),
+			ctx:      workerCtx,
+			cancel:   workerCancel,
 			stats:    &ConsumerWorkerStats{},
 		}
 		cc.workers[i] = worker
@@ -248,30 +278,24 @@ func (cc *ConcurrentConsumer) startWorkers() error {
 	return nil
 }
 
-// deliverMessages receives messages and distributes them to workers
+// deliverMessages receives messages and distributes them to workers using round-robin
 func (cc *ConcurrentConsumer) deliverMessages(ctx context.Context, handler messaging.Handler) {
 	defer func() {
 		if r := recover(); r != nil {
-			if cc.observability != nil && cc.observability.Logger() != nil {
-				cc.observability.Logger().Error("panic in message delivery",
-					logx.Any("panic", r),
-					logx.String("stack", string(debug.Stack())))
-			}
+			cc.logError("panic in message delivery",
+				logx.Any("panic", r),
+				logx.String("stack", string(debug.Stack())))
 		}
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			if cc.observability != nil && cc.observability.Logger() != nil {
-				cc.observability.Logger().Debug("message delivery stopped due to context cancellation")
-			}
+			cc.logDebug("message delivery stopped due to context cancellation")
 			return
 		case delivery, ok := <-cc.deliveries:
 			if !ok {
-				if cc.observability != nil && cc.observability.Logger() != nil {
-					cc.observability.Logger().Debug("message delivery stopped due to channel closure")
-				}
+				cc.logDebug("message delivery stopped due to channel closure")
 				return
 			}
 
@@ -290,26 +314,79 @@ func (cc *ConcurrentConsumer) deliverMessages(ctx context.Context, handler messa
 				startTime:   time.Now(),
 			}
 
-			// Try to queue the task
-			select {
-			case cc.taskQueue <- task:
-				cc.incrementStats("queued_tasks")
-			default:
-				// Task queue is full, drop message or handle overflow
-				cc.handleTaskQueueOverflow(task)
-			}
+			// Distribute task to worker using round-robin
+			cc.distributeTask(task)
 		}
 	}
+}
+
+// distributeTask distributes a task to a worker using round-robin approach
+func (cc *ConcurrentConsumer) distributeTask(task *HandlerTask) {
+	// Use round-robin distribution to avoid race conditions
+	cc.mu.RLock()
+	workerCount := len(cc.workers)
+	if workerCount == 0 {
+		cc.mu.RUnlock()
+		cc.logError("no workers available for task distribution")
+		cc.handleTaskQueueOverflow(task)
+		return
+	}
+	cc.mu.RUnlock()
+
+	workerIndex := atomic.AddInt32(&cc.currentWorker, 1) % int32(workerCount)
+
+	cc.mu.RLock()
+	worker := cc.workers[workerIndex]
+	cc.mu.RUnlock()
+
+	// Try to send to worker's task channel
+	select {
+	case worker.taskChan <- task:
+		cc.incrementStats("queued_tasks")
+	default:
+		// Worker's channel is full, try next worker
+		cc.handleTaskDistributionOverflow(task)
+	}
+}
+
+// handleTaskDistributionOverflow handles overflow when worker channels are full
+func (cc *ConcurrentConsumer) handleTaskDistributionOverflow(task *HandlerTask) {
+	// Try to find an available worker
+	cc.mu.RLock()
+	workerCount := len(cc.workers)
+	cc.mu.RUnlock()
+
+	for i := 0; i < workerCount; i++ {
+		workerIndex := (atomic.AddInt32(&cc.currentWorker, 1) % int32(workerCount))
+
+		cc.mu.RLock()
+		worker := cc.workers[workerIndex]
+		cc.mu.RUnlock()
+
+		select {
+		case worker.taskChan <- task:
+			cc.incrementStats("queued_tasks")
+			return
+		default:
+			continue
+		}
+	}
+
+	// All workers are busy, implement backoff strategy
+	cc.handleTaskQueueOverflow(task)
 }
 
 // convertDelivery converts AMQP delivery to messaging delivery
 func (cc *ConcurrentConsumer) convertDelivery(amqpDelivery amqp091.Delivery) messaging.Delivery {
 	headers := make(map[string]string)
 	for k, v := range amqpDelivery.Headers {
-		if str, ok := v.(string); ok {
-			headers[k] = str
-		} else {
-			headers[k] = fmt.Sprintf("%v", v)
+		// Validate header key is not empty
+		if k != "" {
+			if str, ok := v.(string); ok {
+				headers[k] = str
+			} else {
+				headers[k] = fmt.Sprintf("%v", v)
+			}
 		}
 	}
 
@@ -335,16 +412,96 @@ func (cc *ConcurrentConsumer) convertDelivery(amqpDelivery amqp091.Delivery) mes
 	}
 }
 
-// handleTaskQueueOverflow handles task queue overflow
+// handleTaskQueueOverflow handles task queue overflow with backoff strategy
 func (cc *ConcurrentConsumer) handleTaskQueueOverflow(task *HandlerTask) {
-	// For now, we'll nack the message to requeue it
-	// In production, you might want different strategies
-	task.delivery.Nack(false, true) // Requeue
-	cc.incrementStats("messages_requeued")
+	// Implement exponential backoff for requeuing
+	retryCount := cc.getRetryCount(task)
+	maxBackoffRetries := 3
 
-	if cc.observability != nil && cc.observability.Logger() != nil {
-		cc.observability.Logger().Warn("task queue overflow, message requeued",
-			logx.String("message_id", task.msgDelivery.Message.ID))
+	if retryCount < maxBackoffRetries {
+		// Increment retry count and requeue with backoff
+		cc.incrementRetryCount(task)
+		task.delivery.Nack(false, true) // Requeue
+		cc.incrementStats("messages_requeued")
+
+		cc.logWarn("task queue overflow, message requeued with backoff",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.Int("retry_count", retryCount),
+			logx.String("queue", task.msgDelivery.Queue))
+	} else {
+		// Max backoff retries exceeded, send to DLQ or drop
+		if cc.dlq != nil {
+			cc.handleDLQRouting(task, "task queue overflow after backoff retries")
+		} else {
+			// No DLQ, nack without requeue
+			task.delivery.Nack(false, false)
+			cc.incrementStats("messages_failed")
+		}
+
+		cc.logError("task queue overflow, message dropped after backoff retries",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("queue", task.msgDelivery.Queue),
+			logx.Int("max_backoff_retries", maxBackoffRetries))
+	}
+}
+
+// getRetryCount gets the retry count from message headers
+func (cc *ConcurrentConsumer) getRetryCount(task *HandlerTask) int {
+	if task.msgDelivery.Message.Headers != nil {
+		if retryCountStr, exists := task.msgDelivery.Message.Headers["x-retry-count"]; exists {
+			var retryCount int
+			if n, err := fmt.Sscanf(retryCountStr, "%d", &retryCount); err == nil && n > 0 {
+				return retryCount
+			}
+		}
+	}
+	return 0
+}
+
+// incrementRetryCount increments the retry count in message headers
+func (cc *ConcurrentConsumer) incrementRetryCount(task *HandlerTask) {
+	retryCount := cc.getRetryCount(task) + 1
+	if task.msgDelivery.Message.Headers == nil {
+		task.msgDelivery.Message.Headers = make(map[string]string)
+	}
+	task.msgDelivery.Message.Headers["x-retry-count"] = fmt.Sprintf("%d", retryCount)
+}
+
+// handleDLQRouting handles routing messages to the dead letter queue
+func (cc *ConcurrentConsumer) handleDLQRouting(task *HandlerTask, reason string) {
+	if task == nil {
+		cc.logError("cannot route nil task to DLQ")
+		return
+	}
+
+	if cc.dlq != nil {
+		err := cc.dlq.SendToDLQ(task.ctx, &task.msgDelivery.Message, reason)
+		if err != nil {
+			cc.logError("failed to send message to DLQ",
+				logx.ErrorField(err),
+				logx.String("reason", reason),
+				logx.String("message_id", task.msgDelivery.Message.ID),
+				logx.String("queue", task.msgDelivery.Queue))
+			// If DLQ fails, nack without requeue
+			task.delivery.Nack(false, false)
+			cc.incrementStats("messages_failed")
+		} else {
+			// Successfully sent to DLQ, ack the message
+			task.delivery.Ack(false)
+			cc.incrementStats("messages_sent_to_dlq")
+			cc.logDebug("message successfully sent to DLQ",
+				logx.String("message_id", task.msgDelivery.Message.ID),
+				logx.String("reason", reason),
+				logx.String("queue", task.msgDelivery.Queue))
+		}
+	} else {
+		// No DLQ configured, nack without requeue
+		cc.logWarn("no DLQ configured, dropping message",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("reason", reason),
+			logx.String("queue", task.msgDelivery.Queue))
+		task.delivery.Nack(false, false)
+		cc.incrementStats("messages_failed")
 	}
 }
 
@@ -359,12 +516,54 @@ func (cc *ConcurrentConsumer) Stop(ctx context.Context) error {
 
 	cc.closed = true
 
-	// Close task queue to stop accepting new tasks
-	close(cc.taskQueue)
+	// Cancel context to stop all goroutines
+	if cc.cancel != nil {
+		cc.cancel()
+	}
 
-	// Stop all workers
+	// Use provided context for timeout if available, otherwise use default
+	timeout := 30 * time.Second
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			timeout = time.Until(deadline)
+			if timeout <= 0 {
+				timeout = 5 * time.Second // Minimum timeout
+			}
+		}
+	}
+
+	// Stop all workers with timeout before closing task queue
+	cc.stopWorkersWithTimeout(timeout)
+
+	// Close task queue after workers are stopped
+	select {
+	case <-cc.taskQueue:
+		// Channel is already closed
+	default:
+		close(cc.taskQueue)
+	}
+
+	cc.started = false
+
+	cc.logInfo("concurrent consumer stopped", logx.String("timeout", timeout.String()))
+	return nil
+}
+
+// stopWorkersWithTimeout stops workers with a timeout
+func (cc *ConcurrentConsumer) stopWorkersWithTimeout(timeout time.Duration) {
+	// Cancel all worker contexts
 	for _, worker := range cc.workers {
-		close(worker.done)
+		if worker != nil && worker.cancel != nil {
+			worker.cancel()
+		}
+		if worker != nil {
+			select {
+			case <-worker.done:
+				// Channel is already closed
+			default:
+				close(worker.done)
+			}
+		}
 	}
 
 	// Wait for workers to finish with timeout
@@ -377,20 +576,11 @@ func (cc *ConcurrentConsumer) Stop(ctx context.Context) error {
 	select {
 	case <-done:
 		// Workers finished gracefully
-	case <-time.After(30 * time.Second):
+		cc.logDebug("all workers stopped gracefully")
+	case <-time.After(timeout):
 		// Timeout waiting for workers
-		if cc.observability != nil && cc.observability.Logger() != nil {
-			cc.observability.Logger().Warn("timeout waiting for workers to finish")
-		}
+		cc.logWarn("timeout waiting for workers to finish", logx.String("timeout", timeout.String()))
 	}
-
-	cc.started = false
-
-	if cc.observability != nil && cc.observability.Logger() != nil {
-		cc.observability.Logger().Info("concurrent consumer stopped")
-	}
-
-	return nil
 }
 
 // GetStats returns consumer statistics
@@ -417,16 +607,18 @@ func (cc *ConcurrentConsumer) GetStats() *ConsumerStats {
 func (cc *ConcurrentConsumer) GetWorkerStats() []*ConsumerWorkerStats {
 	stats := make([]*ConsumerWorkerStats, len(cc.workers))
 	for i, worker := range cc.workers {
-		worker.stats.mu.RLock()
-		// Create new stats without copying the mutex
-		workerStats := &ConsumerWorkerStats{
-			TasksProcessed:  worker.stats.TasksProcessed,
-			TasksFailed:     worker.stats.TasksFailed,
-			PanicsRecovered: worker.stats.PanicsRecovered,
-			LastActivity:    worker.stats.LastActivity,
+		if worker != nil && worker.stats != nil {
+			worker.stats.mu.RLock()
+			// Create new stats without copying the mutex
+			workerStats := &ConsumerWorkerStats{
+				TasksProcessed:  worker.stats.TasksProcessed,
+				TasksFailed:     worker.stats.TasksFailed,
+				PanicsRecovered: worker.stats.PanicsRecovered,
+				LastActivity:    worker.stats.LastActivity,
+			}
+			worker.stats.mu.RUnlock()
+			stats[i] = workerStats
 		}
-		worker.stats.mu.RUnlock()
-		stats[i] = workerStats
 	}
 	return stats
 }
@@ -450,7 +642,10 @@ func (cc *ConcurrentConsumer) incrementStats(stat string) {
 	case "panics_recovered":
 		cc.stats.PanicsRecovered++
 	case "queued_tasks":
-		// This is handled dynamically in GetStats
+		// This is handled dynamically in GetStats, no action needed
+	default:
+		// Unknown stat, log for debugging
+		cc.logDebug("unknown stat increment requested", logx.String("stat", stat))
 	}
 }
 
@@ -458,22 +653,19 @@ func (cc *ConcurrentConsumer) incrementStats(stat string) {
 func (cw *ConsumerWorker) start() {
 	defer cw.consumer.workerWg.Done()
 
-	if cw.consumer.observability != nil && cw.consumer.observability.Logger() != nil {
-		cw.consumer.observability.Logger().Debug("consumer worker started",
-			logx.Int("worker_id", cw.id))
-	}
+	cw.consumer.logDebug("consumer worker started", logx.Int("worker_id", cw.id))
 
 	for {
 		select {
-		case task := <-cw.consumer.taskQueue:
+		case task := <-cw.taskChan:
 			if task != nil {
 				cw.processTask(task)
 			}
+		case <-cw.ctx.Done():
+			cw.consumer.logDebug("consumer worker stopped due to context cancellation", logx.Int("worker_id", cw.id))
+			return
 		case <-cw.done:
-			if cw.consumer.observability != nil && cw.consumer.observability.Logger() != nil {
-				cw.consumer.observability.Logger().Debug("consumer worker stopped",
-					logx.Int("worker_id", cw.id))
-			}
+			cw.consumer.logDebug("consumer worker stopped", logx.Int("worker_id", cw.id))
 			return
 		}
 	}
@@ -514,6 +706,12 @@ func (cw *ConsumerWorker) processWithPanicRecovery(task *HandlerTask) {
 		cw.handleTaskResult(task, decision, err)
 	}()
 
+	// Validate handler
+	if task.handler == nil {
+		err = fmt.Errorf("handler is nil")
+		return
+	}
+
 	// Set up timeout for handler
 	handlerCtx := task.ctx
 	if cw.consumer.config.HandlerTimeout > 0 {
@@ -535,14 +733,14 @@ func (cw *ConsumerWorker) handlePanic(task *HandlerTask, r interface{}) {
 
 	cw.consumer.incrementStats("panics_recovered")
 
-	// Log panic
-	if cw.consumer.observability != nil && cw.consumer.observability.Logger() != nil {
-		cw.consumer.observability.Logger().Error("panic recovered in message handler",
-			logx.Int("worker_id", cw.id),
-			logx.String("message_id", task.msgDelivery.Message.ID),
-			logx.Any("panic", r),
-			logx.String("stack", string(debug.Stack())))
-	}
+	// Log panic with more context
+	cw.consumer.logError("panic recovered in message handler",
+		logx.Int("worker_id", cw.id),
+		logx.String("message_id", task.msgDelivery.Message.ID),
+		logx.String("queue", task.msgDelivery.Queue),
+		logx.String("routing_key", task.msgDelivery.RoutingKey),
+		logx.Any("panic", r),
+		logx.String("stack", string(debug.Stack())))
 
 	// Handle panic according to configuration
 	if cw.consumer.config.PanicRecovery {
@@ -551,10 +749,10 @@ func (cw *ConsumerWorker) handlePanic(task *HandlerTask, r interface{}) {
 			panicMsg := fmt.Sprintf("panic in handler: %v", r)
 			err := cw.consumer.dlq.SendToDLQ(task.ctx, &task.msgDelivery.Message, panicMsg)
 			if err != nil {
-				if cw.consumer.observability != nil && cw.consumer.observability.Logger() != nil {
-					cw.consumer.observability.Logger().Error("failed to send panic message to DLQ",
-						logx.ErrorField(err))
-				}
+				cw.consumer.logError("failed to send panic message to DLQ",
+					logx.ErrorField(err),
+					logx.String("message_id", task.msgDelivery.Message.ID),
+					logx.String("queue", task.msgDelivery.Queue))
 				// If DLQ fails, nack and requeue
 				task.delivery.Nack(false, true)
 				cw.consumer.incrementStats("messages_requeued")
@@ -562,14 +760,23 @@ func (cw *ConsumerWorker) handlePanic(task *HandlerTask, r interface{}) {
 				// Successfully sent to DLQ, ack the message
 				task.delivery.Ack(false)
 				cw.consumer.incrementStats("messages_sent_to_dlq")
+				cw.consumer.logDebug("panic message successfully sent to DLQ",
+					logx.String("message_id", task.msgDelivery.Message.ID),
+					logx.String("queue", task.msgDelivery.Queue))
 			}
 		} else {
 			// No DLQ configured, nack and requeue
+			cw.consumer.logWarn("no DLQ configured for panic recovery, requeuing message",
+				logx.String("message_id", task.msgDelivery.Message.ID),
+				logx.String("queue", task.msgDelivery.Queue))
 			task.delivery.Nack(false, true)
 			cw.consumer.incrementStats("messages_requeued")
 		}
 	} else {
 		// Panic recovery disabled, nack without requeue
+		cw.consumer.logWarn("panic recovery disabled, dropping message",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("queue", task.msgDelivery.Queue))
 		task.delivery.Nack(false, false)
 		cw.consumer.incrementStats("messages_failed")
 	}
@@ -587,13 +794,25 @@ func (cw *ConsumerWorker) handleTaskResult(task *HandlerTask, decision messaging
 	case messaging.Ack:
 		task.delivery.Ack(false)
 		cw.consumer.incrementStats("messages_processed")
+		cw.consumer.logDebug("message processed successfully",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.Int("worker_id", cw.id),
+			logx.String("queue", task.msgDelivery.Queue))
 	case messaging.NackRequeue:
 		task.delivery.Nack(false, true) // Requeue
 		cw.consumer.incrementStats("messages_requeued")
+		cw.consumer.logDebug("message requeued by handler",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.Int("worker_id", cw.id),
+			logx.String("queue", task.msgDelivery.Queue))
 	case messaging.NackDLQ:
 		cw.handleDLQRouting(task, "explicit DLQ routing")
 	default:
 		// Default to ack if decision is unclear
+		cw.consumer.logWarn("unknown ack decision, defaulting to ack",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("queue", task.msgDelivery.Queue),
+			logx.Any("decision", decision))
 		task.delivery.Ack(false)
 		cw.consumer.incrementStats("messages_processed")
 	}
@@ -605,39 +824,69 @@ func (cw *ConsumerWorker) handleProcessingError(task *HandlerTask, err error) {
 	cw.stats.TasksFailed++
 	cw.stats.mu.Unlock()
 
+	// Log the processing error with context
+	cw.consumer.logError("message processing failed",
+		logx.String("message_id", task.msgDelivery.Message.ID),
+		logx.Int("worker_id", cw.id),
+		logx.String("queue", task.msgDelivery.Queue),
+		logx.String("routing_key", task.msgDelivery.RoutingKey),
+		logx.ErrorField(err))
+
 	// Check if we should retry or send to DLQ
 	retryCount := cw.getRetryCount(task)
 	maxRetries := cw.consumer.config.MaxRetries
 
 	if maxRetries > 0 && retryCount >= maxRetries {
 		// Max retries exceeded, send to DLQ
+		cw.consumer.logWarn("max retries exceeded, sending to DLQ",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("queue", task.msgDelivery.Queue),
+			logx.Int("retry_count", retryCount),
+			logx.Int("max_retries", maxRetries))
 		cw.handleDLQRouting(task, fmt.Sprintf("max retries exceeded (%d): %v", maxRetries, err))
 	} else if retryCount < maxRetries && maxRetries > 0 {
 		// Increment retry count and requeue
 		cw.incrementRetryCount(task)
 		task.delivery.Nack(false, true) // Requeue
 		cw.consumer.incrementStats("messages_requeued")
+		cw.consumer.logDebug("message requeued for retry",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("queue", task.msgDelivery.Queue),
+			logx.Int("retry_count", retryCount+1),
+			logx.Int("max_retries", maxRetries))
 	} else if cw.consumer.config.RequeueOnError {
 		// Requeue on error (no retry limit or retry disabled)
 		task.delivery.Nack(false, true) // Requeue
 		cw.consumer.incrementStats("messages_requeued")
+		cw.consumer.logDebug("message requeued due to requeue on error setting",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("queue", task.msgDelivery.Queue))
 	} else {
 		// Don't requeue, just nack
 		task.delivery.Nack(false, false)
 		cw.consumer.incrementStats("messages_failed")
+		cw.consumer.logDebug("message dropped due to error",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("queue", task.msgDelivery.Queue))
 	}
 }
 
 // handleDLQRouting handles routing messages to the dead letter queue
 func (cw *ConsumerWorker) handleDLQRouting(task *HandlerTask, reason string) {
+	if task == nil {
+		cw.consumer.logError("cannot route nil task to DLQ")
+		return
+	}
+
 	if cw.consumer.dlq != nil {
 		err := cw.consumer.dlq.SendToDLQ(task.ctx, &task.msgDelivery.Message, reason)
 		if err != nil {
-			if cw.consumer.observability != nil && cw.consumer.observability.Logger() != nil {
-				cw.consumer.observability.Logger().Error("failed to send message to DLQ",
-					logx.ErrorField(err),
-					logx.String("reason", reason))
-			}
+			cw.consumer.logError("failed to send message to DLQ",
+				logx.ErrorField(err),
+				logx.String("reason", reason),
+				logx.String("message_id", task.msgDelivery.Message.ID),
+				logx.String("queue", task.msgDelivery.Queue),
+				logx.Int("worker_id", cw.id))
 			// If DLQ fails, nack without requeue
 			task.delivery.Nack(false, false)
 			cw.consumer.incrementStats("messages_failed")
@@ -645,9 +894,19 @@ func (cw *ConsumerWorker) handleDLQRouting(task *HandlerTask, reason string) {
 			// Successfully sent to DLQ, ack the message
 			task.delivery.Ack(false)
 			cw.consumer.incrementStats("messages_sent_to_dlq")
+			cw.consumer.logDebug("message successfully sent to DLQ",
+				logx.String("message_id", task.msgDelivery.Message.ID),
+				logx.String("reason", reason),
+				logx.String("queue", task.msgDelivery.Queue),
+				logx.Int("worker_id", cw.id))
 		}
 	} else {
 		// No DLQ configured, nack without requeue
+		cw.consumer.logWarn("no DLQ configured, dropping message",
+			logx.String("message_id", task.msgDelivery.Message.ID),
+			logx.String("reason", reason),
+			logx.String("queue", task.msgDelivery.Queue),
+			logx.Int("worker_id", cw.id))
 		task.delivery.Nack(false, false)
 		cw.consumer.incrementStats("messages_failed")
 	}
@@ -655,10 +914,12 @@ func (cw *ConsumerWorker) handleDLQRouting(task *HandlerTask, reason string) {
 
 // getRetryCount gets the retry count from message headers
 func (cw *ConsumerWorker) getRetryCount(task *HandlerTask) int {
-	if retryCountStr, exists := task.msgDelivery.Message.Headers["x-retry-count"]; exists {
-		var retryCount int
-		if n, err := fmt.Sscanf(retryCountStr, "%d", &retryCount); err == nil && n > 0 {
-			return retryCount
+	if task.msgDelivery.Message.Headers != nil {
+		if retryCountStr, exists := task.msgDelivery.Message.Headers["x-retry-count"]; exists {
+			var retryCount int
+			if n, err := fmt.Sscanf(retryCountStr, "%d", &retryCount); err == nil && n > 0 {
+				return retryCount
+			}
 		}
 	}
 	return 0
@@ -671,6 +932,39 @@ func (cw *ConsumerWorker) incrementRetryCount(task *HandlerTask) {
 		task.msgDelivery.Message.Headers = make(map[string]string)
 	}
 	task.msgDelivery.Message.Headers["x-retry-count"] = fmt.Sprintf("%d", retryCount)
+}
+
+// Helper methods for safe logging
+func (cc *ConcurrentConsumer) logInfo(msg string, fields ...logx.Field) {
+	if cc.observability != nil {
+		if logger := cc.observability.Logger(); logger != nil {
+			logger.Info(msg, fields...)
+		}
+	}
+}
+
+func (cc *ConcurrentConsumer) logDebug(msg string, fields ...logx.Field) {
+	if cc.observability != nil {
+		if logger := cc.observability.Logger(); logger != nil {
+			logger.Debug(msg, fields...)
+		}
+	}
+}
+
+func (cc *ConcurrentConsumer) logWarn(msg string, fields ...logx.Field) {
+	if cc.observability != nil {
+		if logger := cc.observability.Logger(); logger != nil {
+			logger.Warn(msg, fields...)
+		}
+	}
+}
+
+func (cc *ConcurrentConsumer) logError(msg string, fields ...logx.Field) {
+	if cc.observability != nil {
+		if logger := cc.observability.Logger(); logger != nil {
+			logger.Error(msg, fields...)
+		}
+	}
 }
 
 // String returns a string representation of the concurrent consumer

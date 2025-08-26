@@ -34,7 +34,8 @@ func TestRabbitMQTransport(t *testing.T) {
 		transport := rabbitmq.NewTransport(config, obsCtx)
 
 		publisherConfig := &messaging.PublisherConfig{}
-		publisher := rabbitmq.NewPublisher(transport, publisherConfig, obsCtx)
+		publisher, err := rabbitmq.NewPublisher(transport, publisherConfig, obsCtx)
+		assert.NoError(t, err)
 		assert.NotNil(t, publisher)
 	})
 
@@ -51,7 +52,8 @@ func TestRabbitMQTransport(t *testing.T) {
 		consumerConfig := &messaging.ConsumerConfig{
 			Queue: "test.queue",
 		}
-		consumer := rabbitmq.NewConsumer(transport, consumerConfig, obsCtx)
+		consumer, err := rabbitmq.NewConsumer(transport, consumerConfig, obsCtx)
+		assert.NoError(t, err)
 		assert.NotNil(t, consumer)
 	})
 }

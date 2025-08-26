@@ -281,7 +281,7 @@ func TestCodecSystem(t *testing.T) {
 		)
 
 		// Test encoding
-		encoded, err := messageCodec.EncodeMessage(&msg)
+		encoded, err := messageCodec.EncodeMessage(msg)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, encoded)
 

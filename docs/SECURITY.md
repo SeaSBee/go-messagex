@@ -86,12 +86,12 @@ openssl x509 -req -days 365 -in client.csr -CA ca.crt -CAkey ca.key -out client.
 ```go
 // Always use TLS in production
 if !config.RabbitMQ.TLS.Enabled {
-    log.Fatal("TLS must be enabled in production")
+    logx.Fatal("TLS must be enabled in production")
 }
 
 // Verify certificate hostname
 if config.RabbitMQ.TLS.ServerName == "" {
-    log.Fatal("Server name must be specified for certificate verification")
+    logx.Fatal("Server name must be specified for certificate verification")
 }
 
 // Use strong cipher suites

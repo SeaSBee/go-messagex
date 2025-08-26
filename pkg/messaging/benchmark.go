@@ -179,16 +179,56 @@ type BenchmarkRunner struct {
 }
 
 // NewBenchmarkRunner creates a new benchmark runner.
-func NewBenchmarkRunner(config *BenchmarkConfig, observability *ObservabilityContext, performance *PerformanceMonitor) *BenchmarkRunner {
+func NewBenchmarkRunner(config *BenchmarkConfig, observability *ObservabilityContext, performance *PerformanceMonitor) (*BenchmarkRunner, error) {
+	if config == nil {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "config cannot be nil", nil)
+	}
+	if observability == nil {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "observability cannot be nil", nil)
+	}
+	if performance == nil {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "performance cannot be nil", nil)
+	}
+
+	// Validate config
+	if config.Duration <= 0 {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "duration must be positive", nil)
+	}
+	if config.WarmupDuration < 0 {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "warmup duration cannot be negative", nil)
+	}
+	if config.PublisherCount <= 0 || config.PublisherCount > 100 {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "publisher count must be between 1 and 100", nil)
+	}
+	if config.ConsumerCount <= 0 || config.ConsumerCount > 100 {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "consumer count must be between 1 and 100", nil)
+	}
+	if config.MessageSize <= 0 || config.MessageSize > 1048576 {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "message size must be between 1 and 1048576", nil)
+	}
+	if config.BatchSize <= 0 || config.BatchSize > 10000 {
+		return nil, WrapError(ErrorCodeValidation, "new_benchmark_runner", "batch size must be between 1 and 10000", nil)
+	}
+
 	return &BenchmarkRunner{
 		config:        config,
 		observability: observability,
 		performance:   performance,
-	}
+	}, nil
 }
 
 // RunBenchmark runs a comprehensive benchmark.
 func (br *BenchmarkRunner) RunBenchmark(ctx context.Context, publisher Publisher, consumer Consumer) (*BenchmarkResult, error) {
+	if ctx == nil {
+		return nil, WrapError(ErrorCodeValidation, "run_benchmark", "context cannot be nil", nil)
+	}
+	if publisher == nil {
+		return nil, WrapError(ErrorCodeValidation, "run_benchmark", "publisher cannot be nil", nil)
+	}
+	if consumer == nil {
+		return nil, WrapError(ErrorCodeValidation, "run_benchmark", "consumer cannot be nil", nil)
+	}
+
 	startTime := time.Now()
 
 	// Create result
@@ -218,6 +258,11 @@ func (br *BenchmarkRunner) RunBenchmark(ctx context.Context, publisher Publisher
 
 // runWarmup runs the warmup phase.
 func (br *BenchmarkRunner) runWarmup(ctx context.Context, publisher Publisher, consumer Consumer) error {
+	if br.config == nil || br.config.WarmupDuration <= 0 {
+		br.observability.Logger().Info("Skipping warmup phase (duration is zero)")
+		return nil
+	}
+
 	br.observability.Logger().Info("Starting warmup phase", logx.String("duration", br.config.WarmupDuration.String()))
 
 	warmupCtx, cancel := context.WithTimeout(ctx, br.config.WarmupDuration)
@@ -259,16 +304,22 @@ func (br *BenchmarkRunner) runWarmupPublisher(ctx context.Context, publisher Pub
 			return
 		case <-ticker.C:
 			msg := br.createTestMessage()
+			if msg.ID == "" || msg.Key == "" || len(msg.Body) == 0 {
+				br.observability.Logger().Debug("Failed to create valid test message for warmup")
+				continue
+			}
+
 			receipt, err := publisher.PublishAsync(ctx, "benchmark.exchange", msg)
 			if err != nil {
+				br.observability.Logger().Debug("Warmup publish failed", logx.String("error", err.Error()))
 				continue
 			}
 
 			select {
 			case <-receipt.Done():
-				// Message published
+				// Message published successfully
 			case <-time.After(1 * time.Second):
-				// Timeout
+				// Timeout - this is expected during warmup
 			}
 		}
 	}
@@ -281,15 +332,24 @@ func (br *BenchmarkRunner) runWarmupConsumer(ctx context.Context, consumer Consu
 	})
 
 	if err := consumer.Start(ctx, handler); err != nil {
+		br.observability.Logger().Debug("Warmup consumer start failed", logx.String("error", err.Error()))
 		return
 	}
-	defer consumer.Stop(ctx)
+	defer func() {
+		if stopErr := consumer.Stop(ctx); stopErr != nil {
+			br.observability.Logger().Debug("Warmup consumer stop failed", logx.String("error", stopErr.Error()))
+		}
+	}()
 
 	<-ctx.Done()
 }
 
 // runBenchmark runs the actual benchmark.
 func (br *BenchmarkRunner) runBenchmark(ctx context.Context, publisher Publisher, consumer Consumer, result *BenchmarkResult) error {
+	if br.config == nil {
+		return WrapError(ErrorCodeValidation, "run_benchmark", "benchmark config is nil", nil)
+	}
+
 	br.observability.Logger().Info("Starting benchmark phase", logx.String("duration", br.config.Duration.String()))
 
 	benchmarkCtx, cancel := context.WithTimeout(ctx, br.config.Duration)
@@ -324,8 +384,10 @@ func (br *BenchmarkRunner) runBenchmark(ctx context.Context, publisher Publisher
 func (br *BenchmarkRunner) runPublishers(ctx context.Context, publisher Publisher) *PublisherBenchmarkResult {
 	var totalMessages, successfulMessages, failedMessages uint64
 	var latencyHistogram *LatencyHistogram
+	var totalLatency int64
+	var latencyCount int64
 
-	if br.config.EnableLatencyTracking {
+	if br.config != nil && br.config.EnableLatencyTracking {
 		latencyHistogram = NewLatencyHistogram()
 	}
 
@@ -334,16 +396,25 @@ func (br *BenchmarkRunner) runPublishers(ctx context.Context, publisher Publishe
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			br.runPublisher(ctx, publisher, &totalMessages, &successfulMessages, &failedMessages, latencyHistogram)
+			br.runPublisher(ctx, publisher, &totalMessages, &successfulMessages, &failedMessages, latencyHistogram, &totalLatency, &latencyCount)
 		}()
 	}
 
 	wg.Wait()
 
-	// Calculate results
-	duration := float64(br.config.Duration.Seconds())
+	// Calculate results with division by zero protection
+	duration := br.config.Duration.Seconds()
+	if duration <= 0 {
+		duration = 1 // Prevent division by zero
+	}
+
 	throughput := float64(successfulMessages) / duration
-	errorRate := float64(failedMessages) / float64(totalMessages) * 100
+
+	// Calculate error rate with division by zero protection
+	var errorRate float64
+	if totalMessages > 0 {
+		errorRate = float64(failedMessages) / float64(totalMessages) * 100
+	}
 
 	result := &PublisherBenchmarkResult{
 		TotalMessages:      totalMessages,
@@ -354,7 +425,10 @@ func (br *BenchmarkRunner) runPublishers(ctx context.Context, publisher Publishe
 	}
 
 	if latencyHistogram != nil {
-		result.AverageLatency = latencyHistogram.Percentile(50) // Use P50 as average for now
+		// Calculate proper average latency
+		if latencyCount > 0 {
+			result.AverageLatency = totalLatency / latencyCount
+		}
 		result.LatencyP50 = latencyHistogram.Percentile(50)
 		result.LatencyP95 = latencyHistogram.Percentile(95)
 		result.LatencyP99 = latencyHistogram.Percentile(99)
@@ -364,7 +438,7 @@ func (br *BenchmarkRunner) runPublishers(ctx context.Context, publisher Publishe
 }
 
 // runPublisher runs a single publisher.
-func (br *BenchmarkRunner) runPublisher(ctx context.Context, publisher Publisher, totalMessages, successfulMessages, failedMessages *uint64, latencyHistogram *LatencyHistogram) {
+func (br *BenchmarkRunner) runPublisher(ctx context.Context, publisher Publisher, totalMessages, successfulMessages, failedMessages *uint64, latencyHistogram *LatencyHistogram, totalLatency, latencyCount *int64) {
 	ticker := time.NewTicker(time.Microsecond) // High frequency publishing
 	defer ticker.Stop()
 
@@ -376,11 +450,18 @@ func (br *BenchmarkRunner) runPublisher(ctx context.Context, publisher Publisher
 			atomic.AddUint64(totalMessages, 1)
 
 			msg := br.createTestMessage()
+			if msg.ID == "" || msg.Key == "" || len(msg.Body) == 0 {
+				atomic.AddUint64(failedMessages, 1)
+				br.observability.Logger().Debug("Failed to create valid test message")
+				continue
+			}
+
 			start := time.Now()
 
 			receipt, err := publisher.PublishAsync(ctx, "benchmark.exchange", msg)
 			if err != nil {
 				atomic.AddUint64(failedMessages, 1)
+				br.observability.Logger().Debug("Publish failed", logx.String("error", err.Error()))
 				continue
 			}
 
@@ -391,6 +472,8 @@ func (br *BenchmarkRunner) runPublisher(ctx context.Context, publisher Publisher
 
 				if latencyHistogram != nil {
 					latencyHistogram.Record(duration.Nanoseconds())
+					atomic.AddInt64(totalLatency, duration.Nanoseconds())
+					atomic.AddInt64(latencyCount, 1)
 				}
 
 				// Record in performance monitor
@@ -412,8 +495,10 @@ func (br *BenchmarkRunner) runPublisher(ctx context.Context, publisher Publisher
 func (br *BenchmarkRunner) runConsumers(ctx context.Context, consumer Consumer) *ConsumerBenchmarkResult {
 	var totalMessages, successfulMessages, failedMessages uint64
 	var latencyHistogram *LatencyHistogram
+	var totalLatency int64
+	var latencyCount int64
 
-	if br.config.EnableLatencyTracking {
+	if br.config != nil && br.config.EnableLatencyTracking {
 		latencyHistogram = NewLatencyHistogram()
 	}
 
@@ -430,6 +515,8 @@ func (br *BenchmarkRunner) runConsumers(ctx context.Context, consumer Consumer) 
 
 		if latencyHistogram != nil {
 			latencyHistogram.Record(duration.Nanoseconds())
+			atomic.AddInt64(&totalLatency, duration.Nanoseconds())
+			atomic.AddInt64(&latencyCount, 1)
 		}
 
 		if br.performance != nil {
@@ -440,20 +527,35 @@ func (br *BenchmarkRunner) runConsumers(ctx context.Context, consumer Consumer) 
 	})
 
 	if err := consumer.Start(ctx, handler); err != nil {
+		br.observability.Logger().Error("Failed to start consumer", logx.String("error", err.Error()))
 		return &ConsumerBenchmarkResult{
+			TotalMessages:  1, // Set to 1 to prevent division by zero
 			FailedMessages: 1,
 			ErrorRate:      100,
 		}
 	}
-	defer consumer.Stop(ctx)
+	defer func() {
+		if stopErr := consumer.Stop(ctx); stopErr != nil {
+			br.observability.Logger().Error("Failed to stop consumer", logx.String("error", stopErr.Error()))
+		}
+	}()
 
 	// Wait for completion
 	<-ctx.Done()
 
-	// Calculate results
-	duration := float64(br.config.Duration.Seconds())
+	// Calculate results with division by zero protection
+	duration := br.config.Duration.Seconds()
+	if duration <= 0 {
+		duration = 1 // Prevent division by zero
+	}
+
 	throughput := float64(successfulMessages) / duration
-	errorRate := float64(failedMessages) / float64(totalMessages) * 100
+
+	// Calculate error rate with division by zero protection
+	var errorRate float64
+	if totalMessages > 0 {
+		errorRate = float64(failedMessages) / float64(totalMessages) * 100
+	}
 
 	result := &ConsumerBenchmarkResult{
 		TotalMessages:      totalMessages,
@@ -464,7 +566,10 @@ func (br *BenchmarkRunner) runConsumers(ctx context.Context, consumer Consumer) 
 	}
 
 	if latencyHistogram != nil {
-		result.AverageLatency = latencyHistogram.Percentile(50)
+		// Calculate proper average latency
+		if latencyCount > 0 {
+			result.AverageLatency = totalLatency / latencyCount
+		}
 		result.LatencyP50 = latencyHistogram.Percentile(50)
 		result.LatencyP95 = latencyHistogram.Percentile(95)
 		result.LatencyP99 = latencyHistogram.Percentile(99)
@@ -478,6 +583,8 @@ func (br *BenchmarkRunner) startSystemMonitoring(ctx context.Context) chan *Syst
 	resultChan := make(chan *SystemBenchmarkResult, 1)
 
 	go func() {
+		defer close(resultChan)
+
 		var peakMemory, totalMemory uint64
 		var peakGoroutines, totalGoroutines int
 		var totalGCs uint32
@@ -493,7 +600,7 @@ func (br *BenchmarkRunner) startSystemMonitoring(ctx context.Context) chan *Syst
 		for {
 			select {
 			case <-ctx.Done():
-				// Calculate averages
+				// Calculate averages with division by zero protection
 				var avgMemory, avgGoroutines uint64
 				var avgGCPauseTime uint64
 
@@ -513,7 +620,12 @@ func (br *BenchmarkRunner) startSystemMonitoring(ctx context.Context) chan *Syst
 					AverageGCPauseTime: avgGCPauseTime,
 				}
 
-				resultChan <- result
+				select {
+				case resultChan <- result:
+				default:
+					// Channel is full or closed, this shouldn't happen but handle gracefully
+					br.observability.Logger().Error("Failed to send system monitoring result")
+				}
 				return
 
 			case <-ticker.C:
@@ -550,23 +662,72 @@ func (br *BenchmarkRunner) startSystemMonitoring(ctx context.Context) chan *Syst
 
 // stopSystemMonitoring stops system monitoring.
 func (br *BenchmarkRunner) stopSystemMonitoring(resultChan chan *SystemBenchmarkResult) *SystemBenchmarkResult {
-	result := <-resultChan
-	return result
+	if resultChan == nil {
+		br.observability.Logger().Error("System monitoring result channel is nil")
+		return &SystemBenchmarkResult{}
+	}
+
+	select {
+	case result := <-resultChan:
+		if result == nil {
+			br.observability.Logger().Error("System monitoring returned nil result")
+			return &SystemBenchmarkResult{}
+		}
+		return result
+	case <-time.After(10 * time.Second): // Increased timeout for better reliability
+		// Timeout to prevent deadlock
+		br.observability.Logger().Error("System monitoring timeout")
+		return &SystemBenchmarkResult{}
+	}
 }
 
 // calculateSummary calculates benchmark summary.
 func (br *BenchmarkRunner) calculateSummary(result *BenchmarkResult) {
-	// Calculate total throughput
-	totalThroughput := result.PublisherResults.Throughput + result.ConsumerResults.Throughput
+	if result == nil {
+		return
+	}
 
-	// Calculate average latency
-	totalLatency := result.PublisherResults.AverageLatency + result.ConsumerResults.AverageLatency
-	averageLatency := totalLatency / 2
+	// Initialize default values
+	totalThroughput := 0.0
+	averageLatency := int64(0)
+	totalErrorRate := 0.0
 
-	// Calculate total error rate
-	totalErrors := result.PublisherResults.FailedMessages + result.ConsumerResults.FailedMessages
-	totalMessages := result.PublisherResults.TotalMessages + result.ConsumerResults.TotalMessages
-	totalErrorRate := float64(totalErrors) / float64(totalMessages) * 100
+	// Calculate total throughput with nil checks
+	if result.PublisherResults != nil {
+		totalThroughput += result.PublisherResults.Throughput
+	}
+	if result.ConsumerResults != nil {
+		totalThroughput += result.ConsumerResults.Throughput
+	}
+
+	// Calculate average latency with nil checks
+	var latencyCount int
+	if result.PublisherResults != nil {
+		averageLatency += result.PublisherResults.AverageLatency
+		latencyCount++
+	}
+	if result.ConsumerResults != nil {
+		averageLatency += result.ConsumerResults.AverageLatency
+		latencyCount++
+	}
+	if latencyCount > 0 {
+		averageLatency = averageLatency / int64(latencyCount)
+	}
+
+	// Calculate total error rate with nil checks and division by zero protection
+	var totalErrors, totalMessages uint64
+	if result.PublisherResults != nil {
+		totalErrors += result.PublisherResults.FailedMessages
+		totalMessages += result.PublisherResults.TotalMessages
+	}
+	if result.ConsumerResults != nil {
+		totalErrors += result.ConsumerResults.FailedMessages
+		totalMessages += result.ConsumerResults.TotalMessages
+	}
+
+	if totalMessages > 0 {
+		totalErrorRate = float64(totalErrors) / float64(totalMessages) * 100
+	}
 
 	// Calculate efficiency (0-100)
 	efficiency := 100.0
@@ -577,6 +738,11 @@ func (br *BenchmarkRunner) calculateSummary(result *BenchmarkResult) {
 		efficiency -= 10
 	}
 
+	// Ensure efficiency is within bounds
+	if efficiency < 0 {
+		efficiency = 0
+	}
+
 	// Generate recommendations
 	var recommendations []string
 	if totalErrorRate > 1 {
@@ -585,10 +751,10 @@ func (br *BenchmarkRunner) calculateSummary(result *BenchmarkResult) {
 	if averageLatency > 1000000 {
 		recommendations = append(recommendations, "High latency detected. Consider optimizing network or reducing load.")
 	}
-	if result.SystemResults.PeakMemoryUsage > 100*1024*1024 { // 100MB
+	if result.SystemResults != nil && result.SystemResults.PeakMemoryUsage > 100*1024*1024 { // 100MB
 		recommendations = append(recommendations, "High memory usage detected. Consider reducing batch sizes or message sizes.")
 	}
-	if result.SystemResults.PeakGoroutines > 1000 {
+	if result.SystemResults != nil && result.SystemResults.PeakGoroutines > 1000 {
 		recommendations = append(recommendations, "High goroutine count detected. Consider reducing concurrency.")
 	}
 
@@ -603,16 +769,29 @@ func (br *BenchmarkRunner) calculateSummary(result *BenchmarkResult) {
 
 // createTestMessage creates a test message.
 func (br *BenchmarkRunner) createTestMessage() Message {
+	// Add nil check for config
+	if br.config == nil {
+		br.observability.Logger().Error("Benchmark config is nil, cannot create test message")
+		return Message{} // Return empty message instead of nil
+	}
+
+	// Validate message size
+	if br.config.MessageSize <= 0 || br.config.MessageSize > 1048576 {
+		br.observability.Logger().Error("Invalid message size", logx.Int("size", br.config.MessageSize))
+		return Message{} // Return empty message instead of nil
+	}
+
 	// Create message with specified size
 	body := make([]byte, br.config.MessageSize)
 	for i := range body {
 		body[i] = byte(i % 256)
 	}
 
-	return NewMessage(
+	msg := NewMessage(
 		body,
 		WithID(fmt.Sprintf("benchmark-%d", time.Now().UnixNano())),
 		WithContentType("application/octet-stream"),
 		WithKey("benchmark.key"),
 	)
+	return *msg
 }

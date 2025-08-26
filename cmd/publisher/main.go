@@ -49,6 +49,18 @@ func (cli *PublisherCLI) parseFlags() {
 		cli.showHelp()
 		os.Exit(0)
 	}
+
+	// Validate priority range
+	if cli.priority < 0 || cli.priority > 255 {
+		fmt.Fprintf(os.Stderr, "Error: priority must be between 0 and 255, got %d\n", cli.priority)
+		os.Exit(1)
+	}
+
+	// Validate message count
+	if cli.messageCount <= 0 {
+		fmt.Fprintf(os.Stderr, "Error: message count must be positive, got %d\n", cli.messageCount)
+		os.Exit(1)
+	}
 }
 
 func (cli *PublisherCLI) showHelp() {
@@ -101,6 +113,11 @@ func (cli *PublisherCLI) loadConfig() (*messaging.Config, error) {
 		}
 	}
 
+	// Add config nil check
+	if config == nil {
+		return nil, fmt.Errorf("failed to load configuration")
+	}
+
 	// Set defaults if not configured
 	if config.Transport == "" {
 		config.Transport = "rabbitmq"
@@ -137,8 +154,9 @@ func (cli *PublisherCLI) validateMessageBody() error {
 		return fmt.Errorf("message body cannot be empty")
 	}
 
-	// Validate JSON if it looks like JSON
-	if strings.TrimSpace(cli.messageBody)[0] == '{' {
+	// Validate JSON if it looks like JSON - fix the string index access
+	trimmed := strings.TrimSpace(cli.messageBody)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
 		var js json.RawMessage
 		if err := json.Unmarshal([]byte(cli.messageBody), &js); err != nil {
 			return fmt.Errorf("invalid JSON message body: %w", err)
@@ -159,6 +177,8 @@ func (cli *PublisherCLI) createMessage(index int) messaging.Message {
 			data["timestamp"] = time.Now().Unix()
 			if newBody, err := json.Marshal(data); err == nil {
 				messageBody = string(newBody)
+			} else {
+				logx.Warn("Failed to marshal enhanced message", logx.String("error", err.Error()))
 			}
 		}
 	}
@@ -176,7 +196,7 @@ func (cli *PublisherCLI) createMessage(index int) messaging.Message {
 		msg.IdempotencyKey = fmt.Sprintf("idemp-%d-%d", time.Now().Unix(), index)
 	}
 
-	return msg
+	return *msg
 }
 
 func (cli *PublisherCLI) runInteractive() error {
@@ -201,12 +221,18 @@ func (cli *PublisherCLI) runInteractive() error {
 	}
 	defer publisher.Close(context.Background())
 
-	// Create observability context
-	obsProvider, err := messaging.NewObservabilityProvider(config.Telemetry)
-	if err != nil {
-		return fmt.Errorf("failed to create observability provider: %w", err)
+	// Create observability context with telemetry nil check
+	var obsCtx *messaging.ObservabilityContext
+	if config.Telemetry == nil {
+		// Skip observability setup if telemetry is not configured
+		obsCtx = messaging.NewObservabilityContext(context.Background(), nil)
+	} else {
+		obsProvider, err := messaging.NewObservabilityProvider(config.Telemetry)
+		if err != nil {
+			return fmt.Errorf("failed to create observability provider: %w", err)
+		}
+		obsCtx = messaging.NewObservabilityContext(context.Background(), obsProvider)
 	}
-	obsCtx := messaging.NewObservabilityContext(context.Background(), obsProvider)
 
 	fmt.Printf("Connected to RabbitMQ at: %s\n", strings.Join(config.RabbitMQ.URIs, ", "))
 	fmt.Printf("Default exchange: %s\n", cli.exchange)
@@ -216,7 +242,19 @@ func (cli *PublisherCLI) runInteractive() error {
 	for {
 		fmt.Print("publisher> ")
 		var input string
-		fmt.Scanln(&input)
+
+		// Handle EOF in interactive mode
+		if _, err := fmt.Scanln(&input); err != nil {
+			if err.Error() == "unexpected newline" {
+				continue
+			}
+			// Handle EOF (Ctrl+D)
+			if err.Error() == "EOF" {
+				fmt.Println("\nGoodbye!")
+				return nil
+			}
+			return fmt.Errorf("input error: %w", err)
+		}
 
 		parts := strings.Fields(input)
 		if len(parts) == 0 {
@@ -279,6 +317,11 @@ func (cli *PublisherCLI) handlePublishCommand(publisher messaging.Publisher, obs
 	}
 	if len(args) > 3 {
 		if p, err := strconv.Atoi(args[3]); err == nil {
+			// Validate priority range
+			if p < 0 || p > 255 {
+				fmt.Printf("Error: priority must be between 0 and 255, got %d\n", p)
+				return
+			}
 			priority = p
 		}
 	}
@@ -299,27 +342,31 @@ func (cli *PublisherCLI) handlePublishCommand(publisher messaging.Publisher, obs
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	receipt, err := publisher.PublishAsync(ctx, exchange, msg)
+	receipt, err := publisher.PublishAsync(ctx, exchange, *msg)
 	if err != nil {
 		fmt.Printf("❌ Failed to publish: %v\n", err)
 		return
 	}
 
-	<-receipt.Done()
-	result, err := receipt.Result()
-	if err != nil {
-		fmt.Printf("❌ Publish failed: %v\n", err)
-		return
-	}
-
-	fmt.Printf("✅ Message published successfully\n")
-	fmt.Printf("   Message ID: %s\n", msg.ID)
-	fmt.Printf("   Exchange: %s\n", exchange)
-	fmt.Printf("   Routing Key: %s\n", routingKey)
-	fmt.Printf("   Priority: %d\n", priority)
-	fmt.Printf("   Delivery Tag: %d\n", result.DeliveryTag)
-	if cli.idempotency {
-		fmt.Printf("   Idempotency Key: %s\n", msg.IdempotencyKey)
+	// Add timeout to receipt waiting
+	select {
+	case <-receipt.Done():
+		result, err := receipt.Result()
+		if err != nil {
+			fmt.Printf("❌ Publish failed: %v\n", err)
+			return
+		}
+		fmt.Printf("✅ Message published successfully\n")
+		fmt.Printf("   Message ID: %s\n", msg.ID)
+		fmt.Printf("   Exchange: %s\n", exchange)
+		fmt.Printf("   Routing Key: %s\n", routingKey)
+		fmt.Printf("   Priority: %d\n", priority)
+		fmt.Printf("   Delivery Tag: %d\n", result.DeliveryTag)
+		if cli.idempotency {
+			fmt.Printf("   Idempotency Key: %s\n", msg.IdempotencyKey)
+		}
+	case <-time.After(30 * time.Second):
+		fmt.Printf("❌ Publish timed out after 30 seconds\n")
 	}
 }
 
@@ -365,11 +412,7 @@ func (cli *PublisherCLI) runBatch() error {
 		return err
 	}
 
-	// Initialize logging
-	if err := logx.InitDefault(); err != nil {
-		return fmt.Errorf("failed to initialize logger: %w", err)
-	}
-	defer logx.Sync()
+	// Logging is already initialized in main()
 
 	// Create transport factory
 	factory := &rabbitmq.TransportFactory{}
@@ -399,24 +442,37 @@ func (cli *PublisherCLI) runBatch() error {
 	fmt.Printf("Priority: %d, Idempotency: %t\n", cli.priority, cli.idempotency)
 	fmt.Println()
 
-	// Publish messages
-	receipts := make([]messaging.Receipt, cli.messageCount)
+	// Improve memory handling in batch mode - use slice with reasonable initial capacity
+	maxReceipts := cli.messageCount
+	if maxReceipts > 10000 {
+		maxReceipts = 10000 // Cap at 10k to prevent excessive memory allocation
+		fmt.Printf("⚠️  Limiting receipt tracking to %d messages for memory efficiency\n", maxReceipts)
+	}
+
+	receipts := make([]messaging.Receipt, 0, maxReceipts)
 	startTime := time.Now()
 
 	for i := 0; i < cli.messageCount; i++ {
 		msg := cli.createMessage(i)
 
-		receipt, err := publisher.PublishAsync(ctx, cli.exchange, msg)
+		// Add context timeout for publisher operations
+		publishCtx, publishCancel := context.WithTimeout(ctx, 30*time.Second)
+		receipt, err := publisher.PublishAsync(publishCtx, cli.exchange, msg)
+		publishCancel()
+
 		if err != nil {
 			fmt.Printf("❌ Failed to publish message %d: %v\n", i+1, err)
 			continue
 		}
 
-		receipts[i] = receipt
+		// Only track receipts if we have space
+		if len(receipts) < maxReceipts {
+			receipts = append(receipts, receipt)
+		}
 		fmt.Printf("📤 Queued message %d/%d (ID: %s)\n", i+1, cli.messageCount, msg.ID)
 	}
 
-	// Wait for all confirmations
+	// Wait for all confirmations with timeout
 	fmt.Println("\n⏳ Waiting for confirmations...")
 	successCount := 0
 	failureCount := 0
@@ -427,15 +483,27 @@ func (cli *PublisherCLI) runBatch() error {
 			continue
 		}
 
-		<-receipt.Done()
-		result, err := receipt.Result()
-		if err != nil {
-			fmt.Printf("❌ Message %d failed: %v\n", i+1, err)
+		// Add timeout to receipt waiting
+		select {
+		case <-receipt.Done():
+			result, err := receipt.Result()
+			if err != nil {
+				fmt.Printf("❌ Message %d failed: %v\n", i+1, err)
+				failureCount++
+			} else {
+				fmt.Printf("✅ Message %d confirmed (Delivery Tag: %d)\n", i+1, result.DeliveryTag)
+				successCount++
+			}
+		case <-time.After(30 * time.Second):
+			fmt.Printf("❌ Message %d timed out after 30 seconds\n", i+1)
 			failureCount++
-		} else {
-			fmt.Printf("✅ Message %d confirmed (Delivery Tag: %d)\n", i+1, result.DeliveryTag)
-			successCount++
 		}
+	}
+
+	// If we limited receipt tracking, estimate the total success/failure
+	if len(receipts) < cli.messageCount {
+		totalSuccess := successCount + (cli.messageCount - len(receipts))
+		fmt.Printf("📊 Note: Only tracked %d receipts, estimated total successful: %d\n", len(receipts), totalSuccess)
 	}
 
 	duration := time.Since(startTime)
@@ -454,6 +522,13 @@ func (cli *PublisherCLI) runBatch() error {
 func main() {
 	cli := &PublisherCLI{}
 	cli.parseFlags()
+
+	// Initialize logging at the start
+	if err := logx.InitDefault(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer logx.Sync()
 
 	if cli.interactive {
 		if err := cli.runInteractive(); err != nil {

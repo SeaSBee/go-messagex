@@ -59,7 +59,8 @@ func TestPublisherConfirms(t *testing.T) {
 		assert.NotNil(t, transport)
 
 		// Create publisher with confirms enabled
-		publisher := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
+		publisher, err := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
+		require.NoError(t, err)
 		assert.NotNil(t, publisher)
 
 		// Verify publisher was created successfully
@@ -97,7 +98,8 @@ func TestPublisherConfirms(t *testing.T) {
 		assert.NotNil(t, transport)
 
 		// Create publisher with confirms disabled
-		publisher := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
+		publisher, err := rabbitmq.NewPublisher(transport, config.Publisher, obsCtx)
+		require.NoError(t, err)
 		assert.NotNil(t, publisher)
 
 		// Test close functionality
