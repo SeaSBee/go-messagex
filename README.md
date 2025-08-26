@@ -500,6 +500,242 @@ For detailed performance tuning guidance, see [Performance Guide](docs/PERFORMAN
 - **Message Size Optimization**: 98.4% reduction in benchmark message sizes
 - **Connection Load Balancing**: Least-used connection selection for optimal distribution
 
+## 💾 Memory Usage and Profiling
+
+### Current Memory Performance Analysis
+
+#### Memory Usage Patterns (Based on Latest Benchmarks)
+- **Peak Memory Usage**: 1.5-5GB depending on workload intensity
+- **Memory Efficiency**: ~3.2MB per 1,000 messages/sec throughput
+- **Garbage Collection**: Average 0.02-0.07ms per GC cycle
+- **Memory Allocation**: 2.1-6.5GB per operation (with object pooling)
+
+#### Memory Usage by Scenario
+| Scenario | Peak Memory | Throughput | Memory/Msg Rate |
+|----------|-------------|------------|-----------------|
+| Small Messages (1P) | 804MB | 239,767 msgs/sec | 3.35MB/1K msgs |
+| Small Messages (4P) | 1,713MB | 539,744 msgs/sec | 3.17MB/1K msgs |
+| Medium Messages (1P) | 815MB | 238,677 msgs/sec | 3.41MB/1K msgs |
+| Large Messages (1P) | 789MB | 204,931 msgs/sec | 3.85MB/1K msgs |
+| High Throughput | 5,007MB | 579,911 msgs/sec | 8.63MB/1K msgs |
+| End-to-End (8P8C) | 3,271MB | 552,927 msgs/sec | 5.92MB/1K msgs |
+
+### Memory Profiling Infrastructure
+
+#### Built-in Memory Monitoring
+The codebase includes comprehensive memory profiling capabilities:
+
+```go
+// Enable memory profiling in performance configuration
+perfConfig := &messaging.PerformanceConfig{
+    EnableMemoryProfiling:      true,
+    EnableCPUProfiling:         true,
+    PerformanceMetricsInterval: 5 * time.Second,
+    MemoryLimit:                1024 * 1024 * 1024, // 1GB
+    GCThreshold:                80.0,
+}
+
+// Create performance monitor with memory tracking
+performanceMonitor := messaging.NewPerformanceMonitor(perfConfig, obsCtx)
+defer performanceMonitor.Close(ctx)
+
+// Get real-time memory metrics
+metrics := performanceMonitor.GetMetrics()
+logx.Info("Memory usage",
+    logx.Uint64("heap_alloc", metrics.HeapAlloc),
+    logx.Uint64("heap_sys", metrics.HeapSys),
+    logx.Uint64("heap_objects", metrics.HeapObjects),
+    logx.Float64("utilization_percent", metrics.MemoryUtilization),
+    logx.Uint32("num_gc", metrics.NumGC),
+    logx.Int("num_goroutines", metrics.NumGoroutines),
+)
+```
+
+#### Memory Health Checks
+```go
+// Configure memory health monitoring
+healthManager := messaging.NewHealthManager()
+healthManager.AddCheck(messaging.NewMemoryHealthChecker(85.0)) // 85% threshold
+healthManager.AddCheck(messaging.NewGoroutineHealthChecker(1000)) // 1000 goroutines max
+
+// Monitor memory health
+report := healthManager.GetHealthReport()
+if report.Status != messaging.HealthStatusHealthy {
+    logx.Warn("Memory health check failed", logx.Any("details", report.Details))
+}
+```
+
+### Profiling Tools and Commands
+
+#### 1. Memory Profiling
+```bash
+# Generate memory profile during benchmarks
+go test -bench=. -benchmem -memprofile=memory.prof ./tests/benchmarks/
+
+# Analyze memory profile
+go tool pprof -top memory.prof
+go tool pprof -web memory.prof
+go tool pprof -list=. memory.prof
+
+# Generate memory allocation graph
+go tool pprof -alloc_space -web memory.prof
+```
+
+#### 2. CPU Profiling
+```bash
+# Generate CPU profile during benchmarks
+go test -bench=. -cpuprofile=cpu.prof ./tests/benchmarks/
+
+# Analyze CPU profile
+go tool pprof -top cpu.prof
+go tool pprof -web cpu.prof
+go tool pprof -list=. cpu.prof
+
+# Generate CPU usage graph
+go tool pprof -cum -web cpu.prof
+```
+
+#### 3. Comprehensive Benchmarking
+```bash
+# Run full benchmark suite with profiling
+./scripts/run_benchmarks.sh
+
+# Run with custom profiling settings
+BENCHMARK_MEMORY=true BENCHMARK_CPU=true ./scripts/run_benchmarks.sh
+
+# Run specific memory efficiency tests
+go test -bench=BenchmarkMemoryEfficiency -benchmem ./tests/benchmarks/
+```
+
+### Memory Optimization Strategies
+
+#### 1. Object Pooling
+```go
+// Use object pools for frequently allocated objects
+var messagePool = sync.Pool{
+    New: func() interface{} {
+        return &messaging.Message{}
+    },
+}
+
+// Get and return objects to pool
+msg := messagePool.Get().(*messaging.Message)
+defer messagePool.Put(msg)
+```
+
+#### 2. Batch Processing
+```go
+// Configure optimal batch sizes for memory efficiency
+config := &messaging.PerformanceConfig{
+    BatchSize:    100,  // Optimal for most workloads
+    BatchTimeout: 100 * time.Millisecond,
+}
+```
+
+#### 3. Connection Pool Management
+```go
+// Monitor connection pool memory usage
+stats := transport.GetConnectionPool().GetStats()
+logx.Info("Connection pool memory",
+    logx.Int("active_connections", stats.ActiveConnections),
+    logx.Int("idle_connections", stats.IdleConnections),
+    logx.Int("total_channels", stats.TotalChannels),
+)
+```
+
+### Memory Usage Analysis Results
+
+#### Top Memory Allocators (from profiling)
+1. **Timer Creation**: 26.5GB (16.49%) - `time.newTimer`
+2. **Context Operations**: 25.3GB (15.73%) - `context.WithDeadlineCause`
+3. **Message Creation**: 24.6GB (15.29%) - `createTestMessage`
+4. **Publisher Operations**: 24.0GB (14.98%) - `PublishAsync`
+5. **Receipt Creation**: 23.0GB (14.30%) - `NewMockReceipt`
+
+#### Memory Optimization Opportunities
+- **Timer Pooling**: Implement timer pooling to reduce `time.newTimer` allocations
+- **Context Reuse**: Optimize context creation and reuse patterns
+- **Message Pooling**: Expand object pooling for message-related structures
+- **Batch Optimization**: Fine-tune batch sizes based on memory constraints
+
+### Real-time Memory Monitoring
+
+#### Production Monitoring Setup
+```go
+// Set up continuous memory monitoring
+func setupMemoryMonitoring() {
+    ticker := time.NewTicker(30 * time.Second)
+    go func() {
+        for range ticker.C {
+            var memStats runtime.MemStats
+            runtime.ReadMemStats(&memStats)
+            
+            logx.Info("Memory status",
+                logx.Uint64("heap_alloc_mb", memStats.HeapAlloc/1024/1024),
+                logx.Uint64("heap_sys_mb", memStats.HeapSys/1024/1024),
+                logx.Uint64("heap_objects", memStats.HeapObjects),
+                logx.Uint32("num_gc", memStats.NumGC),
+                logx.Int("num_goroutines", runtime.NumGoroutine()),
+            )
+            
+            // Alert on high memory usage
+            if memStats.HeapAlloc > 1024*1024*1024 { // 1GB
+                logx.Warn("High memory usage detected",
+                    logx.Uint64("heap_alloc_mb", memStats.HeapAlloc/1024/1024),
+                )
+            }
+        }
+    }()
+}
+```
+
+#### Memory Alerting
+```go
+// Configure memory-based alerting
+func setupMemoryAlerts() {
+    alertThreshold := uint64(1024 * 1024 * 1024) // 1GB
+    
+    go func() {
+        ticker := time.NewTicker(10 * time.Second)
+        for range ticker.C {
+            var memStats runtime.MemStats
+            runtime.ReadMemStats(&memStats)
+            
+            if memStats.HeapAlloc > alertThreshold {
+                logx.Error("Memory usage exceeded threshold",
+                    logx.Uint64("current_mb", memStats.HeapAlloc/1024/1024),
+                    logx.Uint64("threshold_mb", alertThreshold/1024/1024),
+                )
+                
+                // Trigger memory cleanup
+                runtime.GC()
+            }
+        }
+    }()
+}
+```
+
+### Memory Profiling Best Practices
+
+1. **Regular Profiling**: Run memory profiles during development and testing
+2. **Baseline Comparison**: Compare memory usage before and after optimizations
+3. **Load Testing**: Profile under realistic load conditions
+4. **Long-running Tests**: Monitor memory usage over extended periods
+5. **Garbage Collection Analysis**: Track GC frequency and pause times
+
+### Memory Optimization Checklist
+
+- [ ] Enable object pooling for frequently allocated objects
+- [ ] Configure appropriate batch sizes for your workload
+- [ ] Monitor connection pool memory usage
+- [ ] Set up memory health checks and alerting
+- [ ] Profile memory usage under production-like conditions
+- [ ] Optimize message sizes based on requirements
+- [ ] Implement memory cleanup strategies for long-running processes
+- [ ] Monitor garbage collection patterns and optimize if needed
+
+For detailed memory optimization strategies, see [Performance Guide](docs/PERFORMANCE.md).
+
 ## 🔒 Security
 
 ### Security Features

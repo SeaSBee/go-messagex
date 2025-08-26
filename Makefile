@@ -120,6 +120,70 @@ test-bench-race: ## Run benchmarks with race detector
 	$(GOTEST) -race -bench=. -benchmem $(PKG_DIRS)
 	@echo "Benchmarks with race detector complete."
 
+.PHONY: profile-memory
+profile-memory: ## Run memory profiling
+	@echo "Running memory profiling..."
+	$(GOTEST) -bench=. -benchmem -memprofile=memory.prof $(PKG_DIRS)
+	@echo "Memory profile generated: memory.prof"
+	@echo "Analyze with: go tool pprof -top memory.prof"
+
+.PHONY: profile-cpu
+profile-cpu: ## Run CPU profiling
+	@echo "Running CPU profiling..."
+	$(GOTEST) -bench=. -cpuprofile=cpu.prof $(PKG_DIRS)
+	@echo "CPU profile generated: cpu.prof"
+	@echo "Analyze with: go tool pprof -top cpu.prof"
+
+.PHONY: profile-comprehensive
+profile-comprehensive: ## Run comprehensive profiling (memory + CPU)
+	@echo "Running comprehensive profiling..."
+	$(GOTEST) -bench=. -benchmem -memprofile=memory.prof -cpuprofile=cpu.prof $(PKG_DIRS)
+	@echo "Profiles generated: memory.prof, cpu.prof"
+	@echo "Analyze memory: go tool pprof -top memory.prof"
+	@echo "Analyze CPU: go tool pprof -top cpu.prof"
+
+.PHONY: profile-benchmarks
+profile-benchmarks: ## Run profiling on benchmark tests
+	@echo "Running benchmark profiling..."
+	$(GOTEST) -bench=. -benchmem -memprofile=memory.prof -cpuprofile=cpu.prof ./tests/benchmarks/
+	@echo "Benchmark profiles generated: memory.prof, cpu.prof"
+
+.PHONY: analyze-profiles
+analyze-profiles: ## Analyze existing profile files
+	@echo "Analyzing memory profile..."
+	@if [ -f memory.prof ]; then \
+		echo "Memory profile analysis:"; \
+		go tool pprof -top memory.prof; \
+	else \
+		echo "No memory.prof found. Run 'make profile-memory' first."; \
+	fi
+	@echo ""
+	@echo "Analyzing CPU profile..."
+	@if [ -f cpu.prof ]; then \
+		echo "CPU profile analysis:"; \
+		go tool pprof -top cpu.prof; \
+	else \
+		echo "No cpu.prof found. Run 'make profile-cpu' first."; \
+	fi
+
+.PHONY: clean-profiles
+clean-profiles: ## Clean profile files
+	@echo "Cleaning profile files..."
+	@rm -f *.prof
+	@echo "Profile files cleaned."
+
+.PHONY: benchmark-suite
+benchmark-suite: ## Run full benchmark suite with profiling
+	@echo "Running full benchmark suite..."
+	@if [ -f scripts/run_benchmarks.sh ]; then \
+		chmod +x scripts/run_benchmarks.sh; \
+		BENCHMARK_MEMORY=true BENCHMARK_CPU=true ./scripts/run_benchmarks.sh; \
+	else \
+		echo "Benchmark script not found. Running basic benchmarks..."; \
+		$(GOTEST) -bench=. -benchmem -memprofile=memory.prof -cpuprofile=cpu.prof ./tests/benchmarks/; \
+	fi
+	@echo "Benchmark suite completed."
+
 .PHONY: verify
 verify: fmt-check vet lint test-race ## Run all verification checks
 	@echo "All verification checks passed!"
