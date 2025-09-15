@@ -3,6 +3,12 @@ package messaging
 
 import "time"
 
+// Version information
+const (
+	// Version is the current version of go-messagex
+	Version = "v1.1.0"
+)
+
 // Validation constants for message and configuration limits
 const (
 	// Message size limits

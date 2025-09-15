@@ -7,23 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2025-01-15
+
 ### Added
-- CLI applications for publisher and consumer
-- Comprehensive API documentation
-- Troubleshooting guide
-- Performance tuning guide
-- Security considerations documentation
-- Release process documentation
+- Integration with go-validatorx@v1.0.0 for comprehensive validation
+- Integration with go-logx@v1.1.0 for enhanced logging
+- Version constant in messaging package
+- Comprehensive test suite with 1,912 test cases
+- Direct go-validatorx usage without wrappers or adapters
 
 ### Changed
-- Enhanced README with quickstart guide
-- Improved contributing guidelines
-- Updated configuration examples
+- Updated to use go-validatorx@v1.0.0 for all validation operations
+- Updated to use go-logx@v1.1.0 with case-sensitive package path
+- Made package exportable as github.com/SeaSBee/go-messagex
+- Enhanced test isolation and robustness
+- Improved error handling in mock transport tests
 
 ### Fixed
-- Linter issues in test files
-- Race conditions in concurrent tests
-- Configuration loading precedence
+- Test interference issues in MockConsumer error handling
+- Package path case sensitivity issues
+- Validation framework integration
+- Test suite reliability and consistency
+
+### Technical Improvements
+- 100% test pass rate (1,903 passed, 9 skipped, 0 failed)
+- Comprehensive validation framework integration
+- Enhanced observability and telemetry
+- Improved concurrent operation handling
+- Better error propagation and handling
 
 ## [0.1.0] - 2024-12-19
 
