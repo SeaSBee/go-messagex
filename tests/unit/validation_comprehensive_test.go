@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-validatorx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -390,7 +391,7 @@ func TestConfigurationValidation(t *testing.T) {
 			WorkerCount:    4,
 			PublishTimeout: 2 * time.Second, // Set a valid timeout
 		}
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		if !result.Valid {
 			for _, err := range result.Errors {
@@ -405,7 +406,7 @@ func TestConfigurationValidation(t *testing.T) {
 			MaxInFlight: messaging.MaxInFlightMessages + 1,
 			WorkerCount: 4,
 		}
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 	})
@@ -417,7 +418,7 @@ func TestConfigurationValidation(t *testing.T) {
 			MaxConcurrentHandlers: 64,
 			HandlerTimeout:        30 * time.Second, // Set a valid timeout
 		}
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		if !result.Valid {
 			for _, err := range result.Errors {
@@ -433,7 +434,7 @@ func TestConfigurationValidation(t *testing.T) {
 			Prefetch:              messaging.MaxPrefetchCount + 1,
 			MaxConcurrentHandlers: 64,
 		}
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 	})

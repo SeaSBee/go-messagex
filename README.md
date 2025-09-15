@@ -18,7 +18,7 @@ A production-grade, open-source Go module for asynchronous RabbitMQ messaging wi
 ## 📦 Installation
 
 ```bash
-go get github.com/seasbee/go-messagex
+go get github.com/SeaSBee/go-messagex
 ```
 
 ## 🏗️ Architecture
@@ -68,9 +68,9 @@ import (
     "context"
     "time"
     
-    "github.com/seasbee/go-logx"
-    "github.com/seasbee/go-messagex/pkg/rabbitmq"
-    "github.com/seasbee/go-messagex/pkg/messaging"
+    "github.com/SeaSBee/go-logx"
+    "github.com/SeaSBee/go-messagex/pkg/rabbitmq"
+    "github.com/SeaSBee/go-messagex/pkg/messaging"
 )
 
 func main() {
@@ -131,9 +131,9 @@ package main
 import (
     "context"
     
-    "github.com/seasbee/go-logx"
-    "github.com/seasbee/go-messagex/pkg/rabbitmq"
-    "github.com/seasbee/go-messagex/pkg/messaging"
+    "github.com/SeaSBee/go-logx"
+    "github.com/SeaSBee/go-messagex/pkg/rabbitmq"
+    "github.com/SeaSBee/go-messagex/pkg/messaging"
 )
 
 func main() {
@@ -175,9 +175,9 @@ import (
     "context"
     "time"
     
-    "github.com/seasbee/go-logx"
-    "github.com/seasbee/go-messagex/pkg/rabbitmq"
-    "github.com/seasbee/go-messagex/pkg/messaging"
+    "github.com/SeaSBee/go-logx"
+    "github.com/SeaSBee/go-messagex/pkg/rabbitmq"
+    "github.com/SeaSBee/go-messagex/pkg/messaging"
 )
 
 func main() {
@@ -886,7 +886,7 @@ BenchmarkComprehensivePublisher/LargeMessages_1Publisher-12:    245,213 msgs/sec
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/seasbee/go-messagex/issues)
+- **Issues**: [GitHub Issues](https://github.com/SeaSBee/go-messagex/issues)
 - **Security**: [SECURITY.md](SECURITY.md)
 - **Documentation**: [docs/](docs/)
 - **Troubleshooting**: [Troubleshooting Guide](docs/TROUBLESHOOTING.md)

@@ -12,7 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
 )
 
 // Loader provides configuration loading functionality.

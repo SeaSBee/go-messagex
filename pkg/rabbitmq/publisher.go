@@ -6,9 +6,9 @@ import (
 	"regexp"
 	"sync"
 
-	"github.com/seasbee/go-logx"
+	"github.com/SeaSBee/go-logx"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
 )
 
 // Pre-compiled regex patterns for better performance

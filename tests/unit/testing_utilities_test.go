@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -830,6 +830,10 @@ func TestMockConsumer_ErrorHandling(t *testing.T) {
 		err := consumer.Start(ctx, handler)
 		require.NoError(t, err)
 
+		// Get initial error count
+		initialStats := transport.GetStats()
+		initialErrorCount := initialStats["errorCount"].(uint64)
+
 		factory := messaging.NewTestMessageFactory()
 		testMsg := factory.CreateJSONMessage("test-data")
 
@@ -840,9 +844,10 @@ func TestMockConsumer_ErrorHandling(t *testing.T) {
 		// Wait for message processing
 		time.Sleep(100 * time.Millisecond)
 
-		// Verify error was recorded
+		// Verify error was recorded (should be incremented by 1)
 		stats := transport.GetStats()
-		assert.Equal(t, uint64(1), stats["errorCount"])
+		finalErrorCount := stats["errorCount"].(uint64)
+		assert.Equal(t, initialErrorCount+1, finalErrorCount)
 
 		err = consumer.Stop(ctx)
 		assert.NoError(t, err)

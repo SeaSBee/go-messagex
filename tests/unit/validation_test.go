@@ -3,7 +3,7 @@ package unit
 import (
 	"testing"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-validatorx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,7 +18,7 @@ type TestStruct struct {
 
 func TestValidator(t *testing.T) {
 	// Test basic validation functionality
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	// Test valid struct
 	validStruct := TestStruct{
@@ -49,8 +49,8 @@ func TestValidator(t *testing.T) {
 
 func TestValidationContext(t *testing.T) {
 	// Test validation context
-	validator := messaging.NewValidator()
-	ctx := messaging.NewValidationContext(validator)
+	validator := validatorx.NewValidator()
+	ctx := validatorx.NewValidationContext(validator)
 
 	// Test validation
 	validStruct := TestStruct{
@@ -79,13 +79,13 @@ func TestValidationContext(t *testing.T) {
 
 func TestValidationMiddleware(t *testing.T) {
 	// Test validation middleware
-	validator := messaging.NewValidator()
-	middleware := messaging.NewValidationMiddleware(validator)
+	validator := validatorx.NewValidator()
+	middleware := validatorx.NewValidationMiddleware(validator)
 
 	// Test with valid config
-	validConfig := &messaging.Config{
+	validConfig := &validatorx.Config{
 		Transport: "rabbitmq",
-		RabbitMQ: &messaging.RabbitMQConfig{
+		RabbitMQ: &validatorx.RabbitMQConfig{
 			URIs: []string{"amqp://localhost:5672/"},
 		},
 	}
@@ -107,13 +107,13 @@ func TestGlobalValidation(t *testing.T) {
 		Category: "user",
 	}
 
-	result := messaging.ValidateStruct(validStruct)
+	result := validatorx.ValidateStruct(validStruct)
 	assert.True(t, result.Valid)
 }
 
 func TestValidationErrorDetails(t *testing.T) {
 	// Test validation error details
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	invalidStruct := TestStruct{
 		Name:     "",
@@ -136,8 +136,8 @@ func TestValidationErrorDetails(t *testing.T) {
 
 func TestValidationSeverity(t *testing.T) {
 	// Test validation severity levels
-	validator := messaging.NewValidator()
-	ctx := messaging.NewValidationContext(validator)
+	validator := validatorx.NewValidator()
+	ctx := validatorx.NewValidationContext(validator)
 
 	// Test validation with warning severity
 	invalidStruct := TestStruct{
@@ -157,7 +157,7 @@ func TestValidationSeverity(t *testing.T) {
 }
 
 // Helper function to find error by field name
-func findErrorByField(errors []messaging.ValidationError, field string) *messaging.ValidationError {
+func findErrorByField(errors []validatorx.ValidationError, field string) *validatorx.ValidationError {
 	for _, err := range errors {
 		if err.Field == field {
 			return &err

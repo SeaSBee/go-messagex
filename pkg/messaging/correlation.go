@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
+	logx "github.com/SeaSBee/go-logx"
 	"github.com/google/uuid"
-	logx "github.com/seasbee/go-logx"
 )
 
 // CorrelationID represents a unique identifier for tracking message flow.

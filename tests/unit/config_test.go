@@ -4,7 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-validatorx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,7 +38,7 @@ func TestConfigStructureComprehensive(t *testing.T) {
 
 		// The IsValid method doesn't validate transport values, only struct tags do
 		// So we need to use the validator to check struct tag validation
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Transport")
@@ -76,7 +77,7 @@ func TestConfigStructureComprehensive(t *testing.T) {
 		}
 
 		// URI validation is done by struct tags, not IsValid method
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "unknown validation rule")
@@ -110,7 +111,7 @@ func TestConnectionPoolConfigComprehensive(t *testing.T) {
 			HeartbeatInterval:   10 * time.Second,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -121,7 +122,7 @@ func TestConnectionPoolConfigComprehensive(t *testing.T) {
 			Max: 8,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Min")
@@ -133,7 +134,7 @@ func TestConnectionPoolConfigComprehensive(t *testing.T) {
 			Max: 1001, // Invalid: must be <= 1000
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Max")
@@ -145,7 +146,7 @@ func TestConnectionPoolConfigComprehensive(t *testing.T) {
 			Max: 5, // Invalid: max < min
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 	})
@@ -157,7 +158,7 @@ func TestConnectionPoolConfigComprehensive(t *testing.T) {
 			HealthCheckInterval: 0, // Invalid: must be >= 1s
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "HealthCheckInterval")
@@ -171,7 +172,7 @@ func TestConnectionPoolConfigComprehensive(t *testing.T) {
 			ConnectionTimeout:   0,                // Invalid: must be >= 1s
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "ConnectionTimeout")
@@ -186,7 +187,7 @@ func TestConnectionPoolConfigComprehensive(t *testing.T) {
 			HeartbeatInterval:   0,                // Invalid: must be >= 1s
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "HeartbeatInterval")
@@ -235,7 +236,7 @@ func TestChannelPoolConfigComprehensive(t *testing.T) {
 			HealthCheckInterval: 30 * time.Second,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -246,7 +247,7 @@ func TestChannelPoolConfigComprehensive(t *testing.T) {
 			PerConnectionMax: 100,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "PerConnectionMin")
@@ -258,7 +259,7 @@ func TestChannelPoolConfigComprehensive(t *testing.T) {
 			PerConnectionMax: 10001, // Invalid: must be <= 10000
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "PerConnectionMax")
@@ -271,7 +272,7 @@ func TestChannelPoolConfigComprehensive(t *testing.T) {
 			BorrowTimeout:    50 * time.Millisecond, // Invalid: must be >= 100ms
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "BorrowTimeout")
@@ -285,7 +286,7 @@ func TestChannelPoolConfigComprehensive(t *testing.T) {
 			HealthCheckInterval: 0,               // Invalid: must be >= 1s
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "HealthCheckInterval")
@@ -351,7 +352,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			AutoCreateDeadLetter: true,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		// The validation framework doesn't support 'dive' rule, so validation will fail
 		assert.False(t, result.Valid)
@@ -371,7 +372,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			},
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -382,7 +383,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			Type: "direct",
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Name")
@@ -394,7 +395,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			Type: "invalid", // Invalid: must be one of direct, fanout, topic, headers
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Type")
@@ -414,7 +415,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			},
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -424,7 +425,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			Name: "", // Invalid: required
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Name")
@@ -437,7 +438,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			MaxPriority: 256, // Invalid: must be <= 255
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "MaxPriority")
@@ -454,7 +455,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			},
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -466,7 +467,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			Key:      "test.key",
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Exchange")
@@ -479,7 +480,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			Key:      "test.key",
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Queue")
@@ -492,7 +493,7 @@ func TestTopologyConfigComprehensive(t *testing.T) {
 			Key:      "", // Invalid: required
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Key")
@@ -511,7 +512,7 @@ func TestPublisherConfigComprehensive(t *testing.T) {
 			WorkerCount:    4,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -521,7 +522,7 @@ func TestPublisherConfigComprehensive(t *testing.T) {
 			MaxInFlight: 100001, // Invalid: must be <= 100000
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "MaxInFlight")
@@ -533,7 +534,7 @@ func TestPublisherConfigComprehensive(t *testing.T) {
 			PublishTimeout: 50 * time.Millisecond, // Invalid: must be >= 100ms
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "PublishTimeout")
@@ -546,7 +547,7 @@ func TestPublisherConfigComprehensive(t *testing.T) {
 			WorkerCount:    101,             // Invalid: must be <= 100
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "WorkerCount")
@@ -566,7 +567,7 @@ func TestPublisherConfigComprehensive(t *testing.T) {
 			},
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -583,7 +584,7 @@ func TestPublisherConfigComprehensive(t *testing.T) {
 			},
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -645,7 +646,7 @@ func TestConsumerConfigComprehensive(t *testing.T) {
 			MaxRetries:            3,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -655,7 +656,7 @@ func TestConsumerConfigComprehensive(t *testing.T) {
 			Queue: "", // Invalid: required
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Queue")
@@ -667,7 +668,7 @@ func TestConsumerConfigComprehensive(t *testing.T) {
 			Prefetch: 65536, // Invalid: must be <= 65535
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Prefetch")
@@ -680,7 +681,7 @@ func TestConsumerConfigComprehensive(t *testing.T) {
 			MaxConcurrentHandlers: 10001, // Invalid: must be <= 10000
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "MaxConcurrentHandlers")
@@ -694,7 +695,7 @@ func TestConsumerConfigComprehensive(t *testing.T) {
 			HandlerTimeout:        0,   // Invalid: must be >= 1s
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "HandlerTimeout")
@@ -709,7 +710,7 @@ func TestConsumerConfigComprehensive(t *testing.T) {
 			MaxRetries:            101,              // Invalid: must be <= 100
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "MaxRetries")
@@ -782,7 +783,7 @@ func TestTLSConfigComprehensive(t *testing.T) {
 			ServerName:         "rabbitmq.example.com",
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		// The validation framework doesn't support 'file' and 'required_if' rules
 		assert.False(t, result.Valid)
@@ -797,7 +798,7 @@ func TestTLSConfigComprehensive(t *testing.T) {
 			KeyFile:  "", // Invalid: required when TLS is enabled
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 	})
@@ -810,7 +811,7 @@ func TestTLSConfigComprehensive(t *testing.T) {
 			MinVersion: "1.4", // Invalid: must be one of 1.0, 1.1, 1.2, 1.3
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "unknown validation rule")
@@ -826,7 +827,7 @@ func TestTLSConfigComprehensive(t *testing.T) {
 				MinVersion: version,
 			}
 
-			validator := messaging.NewValidator()
+			validator := validatorx.NewValidator()
 			result := validator.ValidateStruct(config)
 			// The validation framework doesn't support 'file' and 'required_if' rules
 			assert.False(t, result.Valid, "TLS version %s should be valid", version)
@@ -877,7 +878,7 @@ func TestSecurityConfigComprehensive(t *testing.T) {
 			VerifyHostname: true,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		// The validation framework doesn't support 'required_if' rule
 		assert.False(t, result.Valid)
@@ -890,7 +891,7 @@ func TestSecurityConfigComprehensive(t *testing.T) {
 			HMACSecret:  "", // Invalid: required when HMAC is enabled
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		// The validation framework doesn't support 'required_if' rule, so validation passes
 		assert.True(t, result.Valid)
@@ -902,7 +903,7 @@ func TestSecurityConfigComprehensive(t *testing.T) {
 			HMACSecret:  "short", // Invalid: must be at least 32 characters
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		// The validation fails on the unsupported 'required_if' rule
 		assert.False(t, result.Valid)
@@ -916,7 +917,7 @@ func TestSecurityConfigComprehensive(t *testing.T) {
 			HMACAlgorithm: "md5", // Invalid: must be one of sha1, sha256, sha512
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		// The validation fails on the unsupported 'required_if' rule
 		assert.False(t, result.Valid)
@@ -932,7 +933,7 @@ func TestSecurityConfigComprehensive(t *testing.T) {
 				HMACAlgorithm: algorithm,
 			}
 
-			validator := messaging.NewValidator()
+			validator := validatorx.NewValidator()
 			result := validator.ValidateStruct(config)
 			// The validation framework doesn't support 'required_if' rule, so validation fails
 			assert.False(t, result.Valid, "HMAC algorithm %s should be valid", algorithm)
@@ -981,7 +982,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			MessageTTL:      24 * time.Hour,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 
 		assert.True(t, result.Valid)
@@ -993,7 +994,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			StorageType: "invalid", // Invalid: must be one of memory, disk, redis
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "StorageType")
@@ -1010,7 +1011,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 				MessageTTL:      24 * time.Hour,
 			}
 
-			validator := messaging.NewValidator()
+			validator := validatorx.NewValidator()
 			result := validator.ValidateStruct(config)
 			assert.True(t, result.Valid, "Storage type %s should be valid", storageType)
 		}
@@ -1023,7 +1024,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			MaxStorageSize: 512, // Invalid: must be >= 1048576 (1MB)
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "MaxStorageSize")
@@ -1040,7 +1041,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			AutoCreate: true,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1051,7 +1052,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			MaxRetries: 101, // Invalid: must be <= 100
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "MaxRetries")
@@ -1063,7 +1064,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			RetryDelay: 50 * time.Millisecond, // Invalid: must be >= 100ms
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "RetryDelay")
@@ -1078,7 +1079,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			SchemaValidation:    false,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1090,7 +1091,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			SerializationFormat: "xml", // Invalid: must be one of json, protobuf, avro
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "SerializationFormat")
@@ -1103,7 +1104,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			CompressionLevel:   10, // Invalid: must be <= 9
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "CompressionLevel")
@@ -1135,7 +1136,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			},
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "unknown validation rule")
@@ -1151,7 +1152,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			Enabled:          true,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1161,7 +1162,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			Name: "", // Invalid: required
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Name")
@@ -1176,7 +1177,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			Enabled:   true,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1188,7 +1189,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 			Action:    "invalid", // Invalid: must be one of accept, reject, modify
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Action")
@@ -1203,7 +1204,7 @@ func TestAdvancedFeaturesConfigComprehensive(t *testing.T) {
 				Action:    action,
 			}
 
-			validator := messaging.NewValidator()
+			validator := validatorx.NewValidator()
 			result := validator.ValidateStruct(config)
 			assert.True(t, result.Valid, "Filter action %s should be valid", action)
 		}
@@ -1220,7 +1221,7 @@ func TestTelemetryConfigComprehensive(t *testing.T) {
 			ServiceVersion: "1.0.0",
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1232,7 +1233,7 @@ func TestTelemetryConfigComprehensive(t *testing.T) {
 			OTLPEndpoint:   "invalid-url", // Invalid: must be a valid URL
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "OTLPEndpoint")
@@ -1250,7 +1251,7 @@ func TestTelemetryConfigComprehensive(t *testing.T) {
 				OTLPEndpoint:   endpoint,
 			}
 
-			validator := messaging.NewValidator()
+			validator := validatorx.NewValidator()
 			result := validator.ValidateStruct(config)
 			assert.True(t, result.Valid, "OTLP endpoint %s should be valid", endpoint)
 		}
@@ -1263,7 +1264,7 @@ func TestTelemetryConfigComprehensive(t *testing.T) {
 			ServiceName:    "a", // Valid: meets min=1 requirement
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1276,7 +1277,7 @@ func TestTelemetryConfigComprehensive(t *testing.T) {
 			ServiceVersion: "this-is-a-very-long-service-version-that-exceeds-the-maximum-length", // Invalid: must be <= 50 characters
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "ServiceVersion")
@@ -1293,7 +1294,7 @@ func TestRetryConfigComprehensive(t *testing.T) {
 			Jitter:            true,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1303,7 +1304,7 @@ func TestRetryConfigComprehensive(t *testing.T) {
 			MaxAttempts: 101, // Invalid: must be <= 100
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "MaxAttempts")
@@ -1315,7 +1316,7 @@ func TestRetryConfigComprehensive(t *testing.T) {
 			BaseBackoff: 5 * time.Millisecond, // Invalid: must be >= 10ms
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "BaseBackoff")
@@ -1328,7 +1329,7 @@ func TestRetryConfigComprehensive(t *testing.T) {
 			MaxBackoff:  50 * time.Millisecond, // Invalid: must be >= 100ms
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "MaxBackoff")
@@ -1342,7 +1343,7 @@ func TestRetryConfigComprehensive(t *testing.T) {
 			BackoffMultiplier: 0.5, // Invalid: must be >= 1.0
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "BackoffMultiplier")
@@ -1357,7 +1358,7 @@ func TestSerializationConfigComprehensive(t *testing.T) {
 			CompressionLevel:   6,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1368,7 +1369,7 @@ func TestSerializationConfigComprehensive(t *testing.T) {
 			DefaultContentType: "a", // Valid: meets min=1 requirement
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.True(t, result.Valid)
 	})
@@ -1380,7 +1381,7 @@ func TestSerializationConfigComprehensive(t *testing.T) {
 			CompressionLevel:   10, // Invalid: must be <= 9
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "CompressionLevel")
@@ -1392,7 +1393,7 @@ func TestConfigEdgeCases(t *testing.T) {
 		config := &messaging.Config{}
 
 		// Use validator to check struct tag validation
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "Transport")
@@ -1432,7 +1433,7 @@ func TestConfigEdgeCases(t *testing.T) {
 
 		// URI validation is done by struct tags, not IsValid method
 		// The dive validation rule is not supported by our custom validator
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Contains(t, result.Errors[0].Message, "unknown validation rule")
@@ -1448,7 +1449,7 @@ func TestConfigEdgeCases(t *testing.T) {
 			HeartbeatInterval:   1 * time.Second,
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		if !result.Valid {
 			t.Logf("Validation failed for minimum values: %+v", result.Errors)
@@ -1484,7 +1485,7 @@ func TestConfigEdgeCases(t *testing.T) {
 			HeartbeatInterval:   0, // Invalid
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		result := validator.ValidateStruct(config)
 		assert.False(t, result.Valid)
 		assert.Len(t, result.Errors, 5) // All fields should have errors

@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-validatorx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -232,7 +233,7 @@ func BenchmarkPerformanceMonitor(b *testing.B) {
 
 // BenchmarkValidator tests validation performance
 func BenchmarkValidator(b *testing.B) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	// Test struct for validation
 	type TestStruct struct {

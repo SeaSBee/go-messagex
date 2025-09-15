@@ -4,13 +4,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-validatorx"
 	"github.com/stretchr/testify/assert"
 )
 
 // TestValidateRequired tests the validateRequired function
 func TestValidateRequired(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("ValidValues", func(t *testing.T) {
 		testCases := []interface{}{
@@ -60,7 +60,7 @@ func TestValidateRequired(t *testing.T) {
 
 // TestValidateOmitEmpty tests the validateOmitEmpty function
 func TestValidateOmitEmpty(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("ValidValues", func(t *testing.T) {
 		testCases := []interface{}{
@@ -121,7 +121,7 @@ func TestValidateOmitEmpty(t *testing.T) {
 
 // TestValidateMin tests the validateMin function
 func TestValidateMin(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("NumericValues", func(t *testing.T) {
 		testCases := []struct {
@@ -239,7 +239,7 @@ func TestValidateMin(t *testing.T) {
 
 // TestValidateMax tests the validateMax function
 func TestValidateMax(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("NumericValues", func(t *testing.T) {
 		testCases := []struct {
@@ -317,7 +317,7 @@ func TestValidateMax(t *testing.T) {
 
 // TestValidateLen tests the validateLen function
 func TestValidateLen(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("StringLength", func(t *testing.T) {
 		testCases := []struct {
@@ -379,7 +379,7 @@ func TestValidateLen(t *testing.T) {
 
 // TestValidateEmail tests the validateEmail function
 func TestValidateEmail(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("ValidEmails", func(t *testing.T) {
 		validEmails := []string{
@@ -429,7 +429,7 @@ func TestValidateEmail(t *testing.T) {
 
 // TestValidateURL tests the validateURL function
 func TestValidateURL(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("ValidURLs", func(t *testing.T) {
 		validURLs := []string{
@@ -471,7 +471,7 @@ func TestValidateURL(t *testing.T) {
 
 // TestValidateRegexp tests the validateRegexp function
 func TestValidateRegexp(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("ValidPatterns", func(t *testing.T) {
 		testCases := []struct {
@@ -530,7 +530,7 @@ func TestValidateRegexp(t *testing.T) {
 
 // TestValidateOneOf tests the validateOneOf function
 func TestValidateOneOf(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("ValidValues", func(t *testing.T) {
 		testCases := []struct {
@@ -573,7 +573,7 @@ func TestValidateOneOf(t *testing.T) {
 
 // TestValidateComparisonRules tests the GTE, LTE, GT, LT validation rules
 func TestValidateComparisonRules(t *testing.T) {
-	validator := messaging.NewValidator()
+	validator := validatorx.NewValidator()
 
 	t.Run("ValidateGTE", func(t *testing.T) {
 		testCases := []struct {

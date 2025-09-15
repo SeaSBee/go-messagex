@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SeaSBee/go-logx"
 	"github.com/rabbitmq/amqp091-go"
-	"github.com/seasbee/go-logx"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
 )
 
 // ConnectionState represents the state of a connection

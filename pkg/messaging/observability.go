@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/seasbee/go-logx"
+	"github.com/SeaSBee/go-logx"
 )
 
 // ObservabilityProvider provides observability capabilities.

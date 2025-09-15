@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"sync"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
 )
 
 // Cached regex pattern for queue name validation

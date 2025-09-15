@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seasbee/go-logx"
+	"github.com/SeaSBee/go-logx"
 )
 
 // Custom context key types to avoid collisions

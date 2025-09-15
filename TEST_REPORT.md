@@ -219,7 +219,7 @@ t.Skip("Skipping real RabbitMQ connection test to avoid hanging in test environm
 ### Dependencies
 - **Test Framework**: `testing` (Go standard library)
 - **Assertions**: `testify/assert` and `testify/require`
-- **Logging**: `github.com/seasbee/go-logx`
+- **Logging**: `github.com/SeaSBee/go-logx`
 - **RabbitMQ Client**: `github.com/rabbitmq/amqp091-go`
 
 ## 🎯 Recommendations

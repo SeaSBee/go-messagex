@@ -5,7 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-validatorx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,7 +20,7 @@ func TestValidationRuleInterface(t *testing.T) {
 		}
 
 		// Verify interface compliance
-		var _ messaging.ValidationRule = customRule
+		var _ validatorx.ValidationRule = customRule
 
 		// Test rule properties
 		assert.Equal(t, "custom_rule", customRule.GetName())
@@ -35,7 +36,7 @@ func TestValidationRuleInterface(t *testing.T) {
 	})
 
 	t.Run("NilValidationRule", func(t *testing.T) {
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 
 		// Test registering nil rule
 		validator.RegisterRule(nil)
@@ -71,12 +72,12 @@ func (r *CustomValidationRule) GetDescription() string {
 // TestValidatorCore tests the core Validator functionality
 func TestValidatorCore(t *testing.T) {
 	t.Run("NewValidator", func(t *testing.T) {
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		assert.NotNil(t, validator)
 	})
 
 	t.Run("RegisterAndGetRule", func(t *testing.T) {
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		customRule := &CustomValidationRule{name: "test_rule", description: "test"}
 
 		validator.RegisterRule(customRule)
@@ -87,21 +88,21 @@ func TestValidatorCore(t *testing.T) {
 	})
 
 	t.Run("GetRuleEmptyName", func(t *testing.T) {
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		rule, exists := validator.GetRule("")
 		assert.False(t, exists)
 		assert.Nil(t, rule)
 	})
 
 	t.Run("ValidateUnknownRule", func(t *testing.T) {
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		err := validator.Validate("unknown_rule", "value")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown validation rule")
 	})
 
 	t.Run("ValidateEmptyRuleName", func(t *testing.T) {
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		err := validator.Validate("", "value")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "validation rule name cannot be empty")
@@ -111,10 +112,10 @@ func TestValidatorCore(t *testing.T) {
 // TestValidationResult tests the ValidationResult structure
 func TestValidationResult(t *testing.T) {
 	t.Run("ValidationResultCreation", func(t *testing.T) {
-		result := &messaging.ValidationResult{
+		result := &validatorx.ValidationResult{
 			Valid:    true,
-			Errors:   []*messaging.ValidationError{},
-			Warnings: []*messaging.ValidationWarning{},
+			Errors:   []*validatorx.ValidationError{},
+			Warnings: []*validatorx.ValidationWarning{},
 		}
 
 		assert.True(t, result.Valid)
@@ -123,39 +124,39 @@ func TestValidationResult(t *testing.T) {
 	})
 
 	t.Run("ValidationResultWithErrors", func(t *testing.T) {
-		error1 := &messaging.ValidationError{
+		error1 := &validatorx.ValidationError{
 			Field:       "field1",
 			Value:       "invalid_value",
 			Rule:        "required",
 			Message:     "field is required",
 			Description: "Field must not be empty",
-			Severity:    messaging.ValidationSeverityError,
+			Severity:    validatorx.ValidationSeverityError,
 		}
 
-		result := &messaging.ValidationResult{
+		result := &validatorx.ValidationResult{
 			Valid:    false,
-			Errors:   []*messaging.ValidationError{error1},
-			Warnings: []*messaging.ValidationWarning{},
+			Errors:   []*validatorx.ValidationError{error1},
+			Warnings: []*validatorx.ValidationWarning{},
 		}
 
 		assert.False(t, result.Valid)
 		assert.Len(t, result.Errors, 1)
 		assert.Equal(t, "field1", result.Errors[0].Field)
 		assert.Equal(t, "required", result.Errors[0].Rule)
-		assert.Equal(t, messaging.ValidationSeverityError, result.Errors[0].Severity)
+		assert.Equal(t, validatorx.ValidationSeverityError, result.Errors[0].Severity)
 	})
 }
 
 // TestValidationError tests the ValidationError structure
 func TestValidationError(t *testing.T) {
 	t.Run("ValidationErrorCreation", func(t *testing.T) {
-		err := &messaging.ValidationError{
+		err := &validatorx.ValidationError{
 			Field:       "test_field",
 			Value:       "invalid_value",
 			Rule:        "required",
 			Message:     "field is required",
 			Description: "Field must not be empty",
-			Severity:    messaging.ValidationSeverityError,
+			Severity:    validatorx.ValidationSeverityError,
 		}
 
 		assert.Equal(t, "test_field", err.Field)
@@ -163,20 +164,20 @@ func TestValidationError(t *testing.T) {
 		assert.Equal(t, "required", err.Rule)
 		assert.Equal(t, "field is required", err.Message)
 		assert.Equal(t, "Field must not be empty", err.Description)
-		assert.Equal(t, messaging.ValidationSeverityError, err.Severity)
+		assert.Equal(t, validatorx.ValidationSeverityError, err.Severity)
 	})
 
 	t.Run("ValidationSeverityValues", func(t *testing.T) {
-		assert.Equal(t, messaging.ValidationSeverity("error"), messaging.ValidationSeverityError)
-		assert.Equal(t, messaging.ValidationSeverity("warning"), messaging.ValidationSeverityWarning)
-		assert.Equal(t, messaging.ValidationSeverity("info"), messaging.ValidationSeverityInfo)
+		assert.Equal(t, validatorx.ValidationSeverity("error"), validatorx.ValidationSeverityError)
+		assert.Equal(t, validatorx.ValidationSeverity("warning"), validatorx.ValidationSeverityWarning)
+		assert.Equal(t, validatorx.ValidationSeverity("info"), validatorx.ValidationSeverityInfo)
 	})
 }
 
 // TestValidationWarning tests the ValidationWarning structure
 func TestValidationWarning(t *testing.T) {
 	t.Run("ValidationWarningCreation", func(t *testing.T) {
-		warning := &messaging.ValidationWarning{
+		warning := &validatorx.ValidationWarning{
 			Field:       "test_field",
 			Value:       "suspicious_value",
 			Rule:        "custom",
@@ -195,29 +196,29 @@ func TestValidationWarning(t *testing.T) {
 // TestValidationContextFramework tests the ValidationContext functionality
 func TestValidationContextFramework(t *testing.T) {
 	t.Run("NewValidationContext", func(t *testing.T) {
-		validator := messaging.NewValidator()
-		ctx := messaging.NewValidationContext(validator)
+		validator := validatorx.NewValidator()
+		ctx := validatorx.NewValidationContext(validator)
 		assert.NotNil(t, ctx)
 		assert.False(t, ctx.HasErrors())
 		assert.False(t, ctx.HasWarnings())
 	})
 
 	t.Run("NewValidationContextWithNilValidator", func(t *testing.T) {
-		ctx := messaging.NewValidationContext(nil)
+		ctx := validatorx.NewValidationContext(nil)
 		assert.NotNil(t, ctx)
 		assert.False(t, ctx.HasErrors())
 		assert.False(t, ctx.HasWarnings())
 	})
 
 	t.Run("ValidationContextAddError", func(t *testing.T) {
-		ctx := messaging.NewValidationContext(nil)
+		ctx := validatorx.NewValidationContext(nil)
 
-		error1 := &messaging.ValidationError{
+		error1 := &validatorx.ValidationError{
 			Field:    "field1",
 			Value:    "invalid",
 			Rule:     "required",
 			Message:  "field is required",
-			Severity: messaging.ValidationSeverityError,
+			Severity: validatorx.ValidationSeverityError,
 		}
 
 		ctx.AddError(error1)
@@ -227,9 +228,9 @@ func TestValidationContextFramework(t *testing.T) {
 	})
 
 	t.Run("ValidationContextAddWarning", func(t *testing.T) {
-		ctx := messaging.NewValidationContext(nil)
+		ctx := validatorx.NewValidationContext(nil)
 
-		warning1 := &messaging.ValidationWarning{
+		warning1 := &validatorx.ValidationWarning{
 			Field:   "field1",
 			Value:   "suspicious",
 			Rule:    "custom",
@@ -243,11 +244,11 @@ func TestValidationContextFramework(t *testing.T) {
 	})
 
 	t.Run("ValidationContextClear", func(t *testing.T) {
-		ctx := messaging.NewValidationContext(nil)
+		ctx := validatorx.NewValidationContext(nil)
 
 		// Add some errors and warnings
-		ctx.AddError(&messaging.ValidationError{Field: "field1", Message: "error"})
-		ctx.AddWarning(&messaging.ValidationWarning{Field: "field1", Message: "warning"})
+		ctx.AddError(&validatorx.ValidationError{Field: "field1", Message: "error"})
+		ctx.AddWarning(&validatorx.ValidationWarning{Field: "field1", Message: "warning"})
 
 		assert.True(t, ctx.HasErrors())
 		assert.True(t, ctx.HasWarnings())
@@ -260,20 +261,20 @@ func TestValidationContextFramework(t *testing.T) {
 	})
 
 	t.Run("ValidationContextToError", func(t *testing.T) {
-		ctx := messaging.NewValidationContext(nil)
+		ctx := validatorx.NewValidationContext(nil)
 
 		// No errors
 		err := ctx.ToError()
 		assert.NoError(t, err)
 
 		// Single error
-		ctx.AddError(&messaging.ValidationError{Field: "field1", Message: "error1"})
+		ctx.AddError(&validatorx.ValidationError{Field: "field1", Message: "error1"})
 		err = ctx.ToError()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "error1")
 
 		// Multiple errors
-		ctx.AddError(&messaging.ValidationError{Field: "field2", Message: "error2"})
+		ctx.AddError(&validatorx.ValidationError{Field: "field2", Message: "error2"})
 		err = ctx.ToError()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "error1")
@@ -283,13 +284,13 @@ func TestValidationContextFramework(t *testing.T) {
 	})
 
 	t.Run("ValidationContextNilHandling", func(t *testing.T) {
-		var ctx *messaging.ValidationContext
+		var ctx *validatorx.ValidationContext
 
 		// All methods should handle nil gracefully
 		ctx.Validate("rule", "value", "field")
 		ctx.ValidateStruct("struct")
-		ctx.AddError(&messaging.ValidationError{})
-		ctx.AddWarning(&messaging.ValidationWarning{})
+		ctx.AddError(&validatorx.ValidationError{})
+		ctx.AddWarning(&validatorx.ValidationWarning{})
 		ctx.Clear()
 
 		assert.False(t, ctx.HasErrors())
@@ -303,7 +304,7 @@ func TestValidationContextFramework(t *testing.T) {
 // TestValidationContextThreadSafety tests concurrent access to ValidationContext
 func TestValidationContextThreadSafety(t *testing.T) {
 	t.Run("ConcurrentValidationContextAccess", func(t *testing.T) {
-		ctx := messaging.NewValidationContext(nil)
+		ctx := validatorx.NewValidationContext(nil)
 		var wg sync.WaitGroup
 		const numGoroutines = 10
 
@@ -312,7 +313,7 @@ func TestValidationContextThreadSafety(t *testing.T) {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				ctx.AddError(&messaging.ValidationError{
+				ctx.AddError(&validatorx.ValidationError{
 					Field:   fmt.Sprintf("field_%d", id),
 					Message: fmt.Sprintf("error_%d", id),
 				})
@@ -328,7 +329,7 @@ func TestValidationContextThreadSafety(t *testing.T) {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				ctx.AddWarning(&messaging.ValidationWarning{
+				ctx.AddWarning(&validatorx.ValidationWarning{
 					Field:   fmt.Sprintf("field_%d", id),
 					Message: fmt.Sprintf("warning_%d", id),
 				})
@@ -344,14 +345,14 @@ func TestValidationContextThreadSafety(t *testing.T) {
 // TestGlobalValidationFramework tests the global validation functions
 func TestGlobalValidationFramework(t *testing.T) {
 	t.Run("SetGlobalValidator", func(t *testing.T) {
-		customValidator := messaging.NewValidator()
+		customValidator := validatorx.NewValidator()
 		customRule := &CustomValidationRule{name: "global_rule", description: "global"}
 		customValidator.RegisterRule(customRule)
 
-		messaging.SetGlobalValidator(customValidator)
+		validatorx.SetGlobalValidator(customValidator)
 
 		// Test that global validator is used
-		err := messaging.ValidateField("global_rule", "invalid_value")
+		err := validatorx.ValidateField("global_rule", "invalid_value")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid value")
 	})
@@ -359,13 +360,13 @@ func TestGlobalValidationFramework(t *testing.T) {
 	t.Run("SetGlobalValidatorNil", func(t *testing.T) {
 		// Should not panic when setting nil validator
 		assert.NotPanics(t, func() {
-			messaging.SetGlobalValidator(nil)
+			validatorx.SetGlobalValidator(nil)
 		})
 	})
 
 	t.Run("ValidateField", func(t *testing.T) {
 		// Test with unknown rule
-		err := messaging.ValidateField("unknown_rule", "value")
+		err := validatorx.ValidateField("unknown_rule", "value")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown validation rule")
 	})
@@ -374,18 +375,18 @@ func TestGlobalValidationFramework(t *testing.T) {
 // TestValidationMiddlewareFramework tests the ValidationMiddleware functionality
 func TestValidationMiddlewareFramework(t *testing.T) {
 	t.Run("NewValidationMiddleware", func(t *testing.T) {
-		validator := messaging.NewValidator()
-		middleware := messaging.NewValidationMiddleware(validator)
+		validator := validatorx.NewValidator()
+		middleware := validatorx.NewValidationMiddleware(validator)
 		assert.NotNil(t, middleware)
 	})
 
 	t.Run("NewValidationMiddlewareWithNilValidator", func(t *testing.T) {
-		middleware := messaging.NewValidationMiddleware(nil)
+		middleware := validatorx.NewValidationMiddleware(nil)
 		assert.NotNil(t, middleware)
 	})
 
 	t.Run("ValidateConfig", func(t *testing.T) {
-		middleware := messaging.NewValidationMiddleware(nil)
+		middleware := validatorx.NewValidationMiddleware(nil)
 
 		// Test with nil config
 		err := middleware.ValidateConfig(nil)
@@ -393,9 +394,9 @@ func TestValidationMiddlewareFramework(t *testing.T) {
 		assert.Contains(t, err.Error(), "config cannot be nil")
 
 		// Test with valid config
-		validConfig := &messaging.Config{
+		validConfig := &validatorx.Config{
 			Transport: "rabbitmq",
-			RabbitMQ: &messaging.RabbitMQConfig{
+			RabbitMQ: &validatorx.RabbitMQConfig{
 				URIs: []string{"amqp://localhost:5672/"},
 			},
 		}
@@ -404,7 +405,7 @@ func TestValidationMiddlewareFramework(t *testing.T) {
 	})
 
 	t.Run("ValidateMessage", func(t *testing.T) {
-		middleware := messaging.NewValidationMiddleware(nil)
+		middleware := validatorx.NewValidationMiddleware(nil)
 
 		// Test with nil message
 		err := middleware.ValidateMessage(nil)
@@ -412,7 +413,7 @@ func TestValidationMiddlewareFramework(t *testing.T) {
 		assert.Contains(t, err.Error(), "message cannot be nil")
 
 		// Test with valid message
-		validMessage := &messaging.Message{
+		validMessage := &validatorx.Message{
 			ID:          "test-id",
 			Body:        []byte("test"),
 			ContentType: "application/json",
@@ -422,7 +423,7 @@ func TestValidationMiddlewareFramework(t *testing.T) {
 	})
 
 	t.Run("ValidateDelivery", func(t *testing.T) {
-		middleware := messaging.NewValidationMiddleware(nil)
+		middleware := validatorx.NewValidationMiddleware(nil)
 
 		// Test with nil delivery
 		err := middleware.ValidateDelivery(nil)
@@ -430,8 +431,8 @@ func TestValidationMiddlewareFramework(t *testing.T) {
 		assert.Contains(t, err.Error(), "delivery cannot be nil")
 
 		// Test with valid delivery
-		validDelivery := &messaging.Delivery{
-			Message: messaging.Message{
+		validDelivery := &validatorx.Delivery{
+			Message: validatorx.Message{
 				ID:   "test-id",
 				Body: []byte("test"),
 			},
@@ -443,18 +444,18 @@ func TestValidationMiddlewareFramework(t *testing.T) {
 	})
 
 	t.Run("ValidationMiddlewareNilHandling", func(t *testing.T) {
-		var middleware *messaging.ValidationMiddleware
+		var middleware *validatorx.ValidationMiddleware
 
 		// All methods should handle nil gracefully
-		err := middleware.ValidateConfig(&messaging.Config{})
+		err := middleware.ValidateConfig(&validatorx.Config{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "validation middleware is nil")
 
-		err = middleware.ValidateMessage(&messaging.Message{})
+		err = middleware.ValidateMessage(&validatorx.Message{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "validation middleware is nil")
 
-		err = middleware.ValidateDelivery(&messaging.Delivery{})
+		err = middleware.ValidateDelivery(&validatorx.Delivery{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "validation middleware is nil")
 	})
@@ -469,7 +470,7 @@ func TestStructTagParsing(t *testing.T) {
 			Field3 string `validate:"email"`
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 
 		// Valid struct
 		valid := SimpleStruct{
@@ -497,7 +498,7 @@ func TestStructTagParsing(t *testing.T) {
 			Field2 int    `validate:"min:10,max:100"`
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 
 		// Valid struct
 		valid := MultiTagStruct{
@@ -531,7 +532,7 @@ func TestStructTagParsing(t *testing.T) {
 			Field3 string `validate:","`
 		}
 
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 		valid := EmptyTagStruct{
 			Field1: "value1",
 			Field2: "value2",
@@ -542,7 +543,7 @@ func TestStructTagParsing(t *testing.T) {
 	})
 
 	t.Run("NilStructHandling", func(t *testing.T) {
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 
 		// Test with nil
 		result := validator.ValidateStruct(nil)
@@ -559,7 +560,7 @@ func TestStructTagParsing(t *testing.T) {
 	})
 
 	t.Run("NonStructHandling", func(t *testing.T) {
-		validator := messaging.NewValidator()
+		validator := validatorx.NewValidator()
 
 		// Test with string
 		result := validator.ValidateStruct("not a struct")

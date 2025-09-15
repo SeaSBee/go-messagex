@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/seasbee/go-messagex/pkg/messaging"
-	"github.com/seasbee/go-messagex/pkg/rabbitmq"
+	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/SeaSBee/go-messagex/pkg/rabbitmq"
 )
 
 // TestPublisherErrorHandling tests error handling scenarios in the publisher
