@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/SeaSBee/go-logx"
+	"github.com/seasbee/go-logx"
 )
 
 // Metrics defines the interface for collecting messaging metrics.

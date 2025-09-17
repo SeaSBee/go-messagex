@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Updated to use go-validatorx@v1.0.0 for all validation operations
 - Updated to use go-logx@v1.1.0 with case-sensitive package path
-- Made package exportable as github.com/SeaSBee/go-messagex
+- Made package exportable as github.com/seasbee/go-messagex
 - Enhanced test isolation and robustness
 - Improved error handling in mock transport tests
 

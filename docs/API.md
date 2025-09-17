@@ -22,7 +22,7 @@ go-messagex is a production-grade, open-source Go module for asynchronous Rabbit
 ## Installation
 
 ```bash
-go get github.com/SeaSBee/go-messagex
+go get github.com/seasbee/go-messagex
 ```
 
 ## Quick Start
@@ -36,8 +36,8 @@ import (
     "context"
     
     "github.com/SeaSBee/go-logx"
-    "github.com/SeaSBee/go-messagex/pkg/messaging"
-    "github.com/SeaSBee/go-messagex/pkg/rabbitmq"
+    "github.com/seasbee/go-messagex/pkg/messaging"
+    "github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
 
 func main() {
@@ -87,8 +87,8 @@ import (
     "context"
     
     "github.com/SeaSBee/go-logx"
-    "github.com/SeaSBee/go-messagex/pkg/messaging"
-    "github.com/SeaSBee/go-messagex/pkg/rabbitmq"
+    "github.com/seasbee/go-messagex/pkg/messaging"
+    "github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
 
 func main() {

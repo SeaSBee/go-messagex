@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SeaSBee/go-messagex/internal/configloader"
-	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/seasbee/go-messagex/internal/configloader"
+	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
 func TestNewLoader(t *testing.T) {

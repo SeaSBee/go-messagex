@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/SeaSBee/go-messagex/pkg/messaging"
-	"github.com/SeaSBee/go-messagex/pkg/rabbitmq"
+	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/seasbee/go-messagex/pkg/rabbitmq"
 )
 
 // TestNewConnectionPoolComprehensive tests the constructor with various scenarios

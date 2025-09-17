@@ -297,8 +297,8 @@ Logs, configuration, etc.
 
 ## 📞 Getting Help
 
-- **Issues**: [GitHub Issues](https://github.com/SeaSBee/go-messagex/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/SeaSBee/go-messagex/discussions)
+- **Issues**: [GitHub Issues](https://github.com/seasbee/go-messagex/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/seasbee/go-messagex/discussions)
 - **Documentation**: [docs/](docs/)
 
 ## 🙏 Acknowledgments

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/SeaSBee/go-logx"
+	"github.com/seasbee/go-logx"
 )
 
 // BenchmarkConfig defines benchmark configuration.

@@ -1,12 +1,12 @@
-module github.com/SeaSBee/go-messagex
+module github.com/seasbee/go-messagex
 
 go 1.24.5
 
 require (
-	github.com/SeaSBee/go-logx v1.1.0
-	github.com/SeaSBee/go-validatorx v1.0.0
 	github.com/google/uuid v1.6.0
 	github.com/rabbitmq/amqp091-go v1.10.0
+	github.com/seasbee/go-logx v1.2.0
+	github.com/seasbee/go-validatorx v1.1.0
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
 )

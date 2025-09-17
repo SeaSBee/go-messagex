@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/SeaSBee/go-messagex/pkg/messaging"
-	"github.com/SeaSBee/go-messagex/pkg/rabbitmq"
+	"github.com/seasbee/go-messagex/pkg/messaging"
+	"github.com/seasbee/go-messagex/pkg/rabbitmq"
 	"github.com/stretchr/testify/assert"
 )
 

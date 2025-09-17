@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SeaSBee/go-logx"
+	"github.com/seasbee/go-logx"
 )
 
 // validateMessageID checks if a message ID is valid.

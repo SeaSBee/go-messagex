@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SeaSBee/go-logx"
 	"github.com/rabbitmq/amqp091-go"
+	"github.com/seasbee/go-logx"
 
-	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
 // ConfirmTracker manages delivery confirmations and returns for a RabbitMQ channel.

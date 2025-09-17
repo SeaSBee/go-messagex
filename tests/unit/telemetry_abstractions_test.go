@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
 func TestCorrelationID(t *testing.T) {

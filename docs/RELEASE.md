@@ -515,14 +515,14 @@ echo "Release $VERSION prepared"
 ## 📦 Installation
 
 ```bash
-go get github.com/SeaSBee/go-messagex@v1.0.0
+go get github.com/seasbee/go-messagex@v1.0.0
 ```
 
 ## 🔗 Links
 
-- [Documentation](https://github.com/SeaSBee/go-messagex/docs)
-- [API Reference](https://github.com/SeaSBee/go-messagex/docs/API.md)
-- [Migration Guide](https://github.com/SeaSBee/go-messagex/docs/MIGRATION.md)
+- [Documentation](https://github.com/seasbee/go-messagex/docs)
+- [API Reference](https://github.com/seasbee/go-messagex/docs/API.md)
+- [Migration Guide](https://github.com/seasbee/go-messagex/docs/MIGRATION.md)
 
 ## 🙏 Thanks
 

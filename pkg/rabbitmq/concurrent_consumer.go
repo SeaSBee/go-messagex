@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/SeaSBee/go-logx"
 	"github.com/rabbitmq/amqp091-go"
+	"github.com/seasbee/go-logx"
 
-	"github.com/SeaSBee/go-messagex/pkg/messaging"
+	"github.com/seasbee/go-messagex/pkg/messaging"
 )
 
 // HandlerTask represents a message handling task
