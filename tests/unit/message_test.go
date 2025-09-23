@@ -1,1295 +1,962 @@
 package unit
 
 import (
+	"encoding/json"
 	"fmt"
-	"regexp"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMessageOptionFunctions(t *testing.T) {
-	t.Run("WithID", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid ID
-		messaging.WithID("test-123")(msg)
-		assert.Equal(t, "test-123", msg.ID)
-
-		// Test with nil message
-		messaging.WithID("test-456")(nil)
-		// Should not panic
-
-		// Test empty ID
-		messaging.WithID("")(msg)
-		assert.Equal(t, "", msg.ID)
-	})
-
-	t.Run("WithKey", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid key
-		messaging.WithKey("test.key")(msg)
-		assert.Equal(t, "test.key", msg.Key)
-
-		// Test with nil message
-		messaging.WithKey("test.key")(nil)
-		// Should not panic
-
-		// Test empty key
-		messaging.WithKey("")(msg)
-		assert.Equal(t, "", msg.Key)
-	})
-
-	t.Run("WithHeaders", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid headers
-		headers := map[string]string{"key1": "value1", "key2": "value2"}
-		messaging.WithHeaders(headers)(msg)
-		assert.Equal(t, headers, msg.Headers)
-
-		// Test with nil message
-		messaging.WithHeaders(headers)(nil)
-		// Should not panic
-
-		// Test with nil headers
-		messaging.WithHeaders(nil)(msg)
-		assert.Nil(t, msg.Headers)
-
-		// Test with empty headers
-		messaging.WithHeaders(map[string]string{})(msg)
-		assert.Empty(t, msg.Headers)
-	})
-
-	t.Run("WithHeadersValidation", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test too many headers (should panic)
-		tooManyHeaders := make(map[string]string)
-		for i := 0; i < 101; i++ {
-			tooManyHeaders[fmt.Sprintf("key%d", i)] = "value"
-		}
-
-		assert.Panics(t, func() {
-			messaging.WithHeaders(tooManyHeaders)(msg)
-		})
-
-		// Test header key too long (should panic)
-		longKey := string(make([]byte, 256))
-		headersWithLongKey := map[string]string{longKey: "value"}
-
-		assert.Panics(t, func() {
-			messaging.WithHeaders(headersWithLongKey)(msg)
-		})
-
-		// Test header value too large (should panic)
-		largeValue := string(make([]byte, messaging.MaxHeaderSize+1))
-		headersWithLargeValue := map[string]string{"key": largeValue}
-
-		assert.Panics(t, func() {
-			messaging.WithHeaders(headersWithLargeValue)(msg)
-		})
-	})
-
-	t.Run("WithHeader", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test adding single header
-		messaging.WithHeader("key1", "value1")(msg)
-		assert.Equal(t, "value1", msg.Headers["key1"])
-
-		// Test adding multiple headers
-		messaging.WithHeader("key2", "value2")(msg)
-		assert.Equal(t, "value2", msg.Headers["key2"])
-		assert.Len(t, msg.Headers, 2)
-
-		// Test with nil message
-		messaging.WithHeader("key3", "value3")(nil)
-		// Should not panic
-
-		// Test overwriting existing header
-		messaging.WithHeader("key1", "new-value")(msg)
-		assert.Equal(t, "new-value", msg.Headers["key1"])
-	})
-
-	t.Run("WithContentType", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid content types
-		validTypes := []string{
-			"application/json",
-			"application/xml",
-			"text/plain",
-			"text/html",
-			"application/octet-stream",
-			"application/protobuf",
-			"application/avro",
-		}
-
-		for _, contentType := range validTypes {
-			messaging.WithContentType(contentType)(msg)
-			assert.Equal(t, contentType, msg.ContentType)
-		}
-
-		// Test with nil message
-		messaging.WithContentType("application/json")(nil)
-		// Should not panic
-
-		// Test empty content type
-		messaging.WithContentType("")(msg)
-		assert.Equal(t, "", msg.ContentType)
-	})
-
-	t.Run("WithTimestamp", func(t *testing.T) {
-		msg := &messaging.Message{}
-		timestamp := time.Now()
-
-		// Test valid timestamp
-		messaging.WithTimestamp(timestamp)(msg)
-		assert.Equal(t, timestamp, msg.Timestamp)
-
-		// Test with nil message
-		messaging.WithTimestamp(timestamp)(nil)
-		// Should not panic
-
-		// Test zero timestamp
-		messaging.WithTimestamp(time.Time{})(msg)
-		assert.Equal(t, time.Time{}, msg.Timestamp)
-	})
-
-	t.Run("WithPriority", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid priorities
-		priorities := []uint8{0, 50, 100, 150, 200, 255}
-		for _, priority := range priorities {
-			messaging.WithPriority(priority)(msg)
-			assert.Equal(t, priority, msg.Priority)
-		}
-
-		// Test with nil message
-		messaging.WithPriority(100)(nil)
-		// Should not panic
-	})
-
-	t.Run("WithIdempotencyKey", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid idempotency key
-		messaging.WithIdempotencyKey("idempotent-key-123")(msg)
-		assert.Equal(t, "idempotent-key-123", msg.IdempotencyKey)
-
-		// Test with nil message
-		messaging.WithIdempotencyKey("key")(nil)
-		// Should not panic
-
-		// Test empty key
-		messaging.WithIdempotencyKey("")(msg)
-		assert.Equal(t, "", msg.IdempotencyKey)
-	})
-
-	t.Run("WithCorrelationID", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid correlation ID
-		messaging.WithCorrelationID("correlation-123")(msg)
-		assert.Equal(t, "correlation-123", msg.CorrelationID)
-
-		// Test with nil message
-		messaging.WithCorrelationID("corr-id")(nil)
-		// Should not panic
-
-		// Test empty correlation ID
-		messaging.WithCorrelationID("")(msg)
-		assert.Equal(t, "", msg.CorrelationID)
-	})
-
-	t.Run("WithReplyTo", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid reply-to
-		messaging.WithReplyTo("reply.queue")(msg)
-		assert.Equal(t, "reply.queue", msg.ReplyTo)
-
-		// Test with nil message
-		messaging.WithReplyTo("reply")(nil)
-		// Should not panic
-
-		// Test empty reply-to
-		messaging.WithReplyTo("")(msg)
-		assert.Equal(t, "", msg.ReplyTo)
-	})
-
-	t.Run("WithExpiration", func(t *testing.T) {
-		msg := &messaging.Message{}
-
-		// Test valid expiration
-		expiration := 5 * time.Minute
-		messaging.WithExpiration(expiration)(msg)
-		assert.Equal(t, expiration, msg.Expiration)
-
-		// Test with nil message
-		messaging.WithExpiration(expiration)(nil)
-		// Should not panic
-
-		// Test zero expiration
-		messaging.WithExpiration(0)(msg)
-		assert.Equal(t, time.Duration(0), msg.Expiration)
-
-		// Test negative expiration
-		messaging.WithExpiration(-time.Minute)(msg)
-		assert.Equal(t, -time.Minute, msg.Expiration)
+// TestMessagePriority tests message priority constants and validation
+func TestMessagePriority(t *testing.T) {
+	t.Run("priority constants are defined correctly", func(t *testing.T) {
+		assert.Equal(t, messaging.MessagePriority(0), messaging.PriorityLow)
+		assert.Equal(t, messaging.MessagePriority(1), messaging.PriorityNormal)
+		assert.Equal(t, messaging.MessagePriority(2), messaging.PriorityHigh)
+		assert.Equal(t, messaging.MessagePriority(3), messaging.PriorityCritical)
 	})
 }
 
-func TestMessageMethods(t *testing.T) {
-	t.Run("Clone", func(t *testing.T) {
-		// Create original message
-		original := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithID("test-123"),
-			messaging.WithHeaders(map[string]string{"key1": "value1", "key2": "value2"}),
-			messaging.WithContentType("application/json"),
-			messaging.WithPriority(5),
-			messaging.WithCorrelationID("corr-123"),
-			messaging.WithIdempotencyKey("idemp-123"),
-			messaging.WithReplyTo("reply.queue"),
-			messaging.WithExpiration(5*time.Minute),
-		)
+// TestNewMessage tests message creation functions
+func TestNewMessage(t *testing.T) {
+	t.Run("creates message with body", func(t *testing.T) {
+		body := []byte("test message")
+		msg := messaging.NewMessage(body)
 
-		// Clone the message
-		cloned := original.Clone()
-
-		// Verify all fields are copied
-		assert.Equal(t, original.ID, cloned.ID)
-		assert.Equal(t, original.Key, cloned.Key)
-		assert.Equal(t, original.ContentType, cloned.ContentType)
-		assert.Equal(t, original.Priority, cloned.Priority)
-		assert.Equal(t, original.CorrelationID, cloned.CorrelationID)
-		assert.Equal(t, original.IdempotencyKey, cloned.IdempotencyKey)
-		assert.Equal(t, original.ReplyTo, cloned.ReplyTo)
-		assert.Equal(t, original.Expiration, cloned.Expiration)
-		assert.Equal(t, original.Timestamp.Unix(), cloned.Timestamp.Unix())
-
-		// Verify body is deep copied
-		assert.Equal(t, original.Body, cloned.Body)
-		assert.NotSame(t, &original.Body[0], &cloned.Body[0])
-
-		// Verify headers are deep copied
-		assert.Equal(t, original.Headers, cloned.Headers)
-		// Headers are strings, so we can't use NotSame for individual values
-		// But we can verify the maps are different objects
-		if original.Headers != nil {
-			assert.NotSame(t, &original.Headers, &cloned.Headers)
-		}
-
-		// Test modifying original doesn't affect clone
-		original.Body[0] = 'X'
-		original.Headers["key1"] = "modified"
-		assert.NotEqual(t, original.Body, cloned.Body)
-		assert.NotEqual(t, original.Headers["key1"], cloned.Headers["key1"])
+		assert.NotNil(t, msg)
+		assert.NotEmpty(t, msg.ID)
+		assert.Equal(t, body, msg.Body)
+		assert.NotNil(t, msg.Headers)
+		assert.NotNil(t, msg.Metadata)
+		assert.Equal(t, messaging.PriorityNormal, msg.Priority)
+		assert.Equal(t, "application/octet-stream", msg.ContentType)
+		assert.Equal(t, "utf-8", msg.Encoding)
+		assert.False(t, msg.Timestamp.IsZero())
 	})
 
-	t.Run("CloneWithNilHeaders", func(t *testing.T) {
-		original := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-		)
-		original.Headers = nil
+	t.Run("creates message with specific ID", func(t *testing.T) {
+		id := "test-id-123"
+		body := []byte("test message")
+		msg := messaging.NewMessageWithID(id, body)
 
-		cloned := original.Clone()
-		assert.Nil(t, cloned.Headers)
+		assert.NotNil(t, msg)
+		assert.Equal(t, id, msg.ID)
+		assert.Equal(t, body, msg.Body)
 	})
 
-	t.Run("String", func(t *testing.T) {
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithID("test-123"),
-			messaging.WithContentType("application/json"),
-			messaging.WithPriority(5),
-		)
+	t.Run("creates text message", func(t *testing.T) {
+		text := "hello world"
+		msg := messaging.NewTextMessage(text)
 
-		str := msg.String()
-
-		// Verify string contains expected fields
-		assert.Contains(t, str, "Message{ID:test-123")
-		assert.Contains(t, str, "Key:test.key")
-		assert.Contains(t, str, "ContentType:application/json")
-		assert.Contains(t, str, "BodyLen:9")
-		assert.Contains(t, str, "Priority:5")
-	})
-
-	t.Run("UnmarshalTo", func(t *testing.T) {
-		// Test valid JSON unmarshaling
-
-		msg := messaging.NewMessage(
-			[]byte(`{"name":"test","age":25,"active":true}`),
-			messaging.WithKey("test.key"),
-			messaging.WithContentType("application/json"),
-		)
-
-		var result map[string]interface{}
-		err := msg.UnmarshalTo(&result)
-		assert.NoError(t, err)
-		// Note: JSON unmarshaling converts numbers to float64
-		assert.Equal(t, "test", result["name"])
-		assert.Equal(t, float64(25), result["age"])
-		assert.Equal(t, true, result["active"])
-
-		// Test with nil destination
-		err = msg.UnmarshalTo(nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "destination cannot be nil")
-
-		// Test with non-JSON content type
-		msg.ContentType = "text/plain"
-		err = msg.UnmarshalTo(&result)
-		assert.Error(t, err)
-		assert.Equal(t, messaging.ErrInvalidContentType, err)
-
-		// Test with invalid JSON
-		msg.Body = []byte(`{"invalid": json}`)
-		msg.ContentType = "application/json"
-		err = msg.UnmarshalTo(&result)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid character")
-	})
-
-	t.Run("Text", func(t *testing.T) {
-		// Test text conversion
-		text := "Hello, World!"
-		msg := messaging.NewMessage(
-			[]byte(text),
-			messaging.WithKey("test.key"),
-		)
-
-		result := msg.Text()
-		assert.Equal(t, text, result)
-
-		// Test with empty body
-		msg.Body = []byte{}
-		result = msg.Text()
-		assert.Equal(t, "", result)
-
-		// Test with non-ASCII text
-		unicodeText := "Hello, 世界!"
-		msg.Body = []byte(unicodeText)
-		result = msg.Text()
-		assert.Equal(t, unicodeText, result)
-	})
-
-	t.Run("Size", func(t *testing.T) {
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithID("test-123"),
-			messaging.WithHeaders(map[string]string{"key1": "value1", "key2": "value2"}),
-			messaging.WithContentType("application/json"),
-			messaging.WithCorrelationID("corr-123"),
-			messaging.WithIdempotencyKey("idemp-123"),
-			messaging.WithReplyTo("reply.queue"),
-		)
-
-		size := msg.Size()
-
-		// Verify size includes all fields
-		expectedSize := len(msg.Body) + len(msg.ID) + len(msg.Key) + len(msg.ContentType) +
-			len(msg.CorrelationID) + len(msg.IdempotencyKey) + len(msg.ReplyTo)
-
-		// Add header sizes
-		for key, value := range msg.Headers {
-			expectedSize += len(key) + len(value)
-		}
-
-		// Note: Size calculation may return -1 on overflow
-		// This is expected behavior for very large messages
-		if size == -1 {
-			// Overflow occurred, which is expected for large messages
-			assert.True(t, true, "Size overflow occurred as expected")
-		} else {
-			assert.Greater(t, size, 0)
-		}
-	})
-
-	t.Run("SizeWithNilHeaders", func(t *testing.T) {
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-		)
-		msg.Headers = nil
-
-		size := msg.Size()
-		// Size calculation may return -1 on overflow
-		if size == -1 {
-			// Overflow occurred, which is expected for large messages
-			assert.True(t, true, "Size overflow occurred as expected")
-		} else {
-			assert.Greater(t, size, 0)
-		}
-	})
-
-	t.Run("IsExpired", func(t *testing.T) {
-		// Test not expired
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithExpiration(5*time.Minute),
-		)
-
-		assert.False(t, msg.IsExpired())
-
-		// Test expired
-		msg.Expiration = 1 * time.Nanosecond
-		time.Sleep(1 * time.Millisecond) // Ensure enough time has passed
-		assert.True(t, msg.IsExpired())
-
-		// Test no expiration
-		msg.Expiration = 0
-		assert.False(t, msg.IsExpired())
-
-		// Test negative expiration
-		msg.Expiration = -time.Minute
-		assert.False(t, msg.IsExpired())
-	})
-
-	t.Run("HasHeader", func(t *testing.T) {
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithHeaders(map[string]string{"key1": "value1", "key2": "value2"}),
-		)
-
-		// Test existing headers
-		assert.True(t, msg.HasHeader("key1"))
-		assert.True(t, msg.HasHeader("key2"))
-
-		// Test non-existing headers
-		assert.False(t, msg.HasHeader("key3"))
-		assert.False(t, msg.HasHeader(""))
-
-		// Test with nil headers
-		msg.Headers = nil
-		assert.False(t, msg.HasHeader("key1"))
-	})
-
-	t.Run("GetHeader", func(t *testing.T) {
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithHeaders(map[string]string{"key1": "value1", "key2": "value2"}),
-		)
-
-		// Test existing headers
-		value, exists := msg.GetHeader("key1")
-		assert.True(t, exists)
-		assert.Equal(t, "value1", value)
-
-		value, exists = msg.GetHeader("key2")
-		assert.True(t, exists)
-		assert.Equal(t, "value2", value)
-
-		// Test non-existing headers
-		value, exists = msg.GetHeader("key3")
-		assert.False(t, exists)
-		assert.Equal(t, "", value)
-
-		value, exists = msg.GetHeader("")
-		assert.False(t, exists)
-		assert.Equal(t, "", value)
-
-		// Test with nil headers
-		msg.Headers = nil
-		value, exists = msg.GetHeader("key1")
-		assert.False(t, exists)
-		assert.Equal(t, "", value)
-	})
-}
-
-func TestSpecializedMessageCreation(t *testing.T) {
-	t.Run("NewTextMessage", func(t *testing.T) {
-		// Test valid text message
-		text := "Hello, World!"
-		msg := messaging.NewTextMessage(text, messaging.WithKey("test.key"))
-
+		assert.NotNil(t, msg)
 		assert.Equal(t, []byte(text), msg.Body)
 		assert.Equal(t, "text/plain", msg.ContentType)
-		assert.Equal(t, "test.key", msg.Key)
-		assert.NotEmpty(t, msg.ID)
-		assert.NotZero(t, msg.Timestamp)
-
-		// Test with additional options
-		msg = messaging.NewTextMessage(
-			text,
-			messaging.WithKey("test.key"),
-			messaging.WithID("custom-id"),
-			messaging.WithPriority(10),
-		)
-
-		assert.Equal(t, "custom-id", msg.ID)
-		assert.Equal(t, uint8(10), msg.Priority)
-
-		// Test empty text (should panic)
-		assert.Panics(t, func() {
-			messaging.NewTextMessage("")
-		})
 	})
 
-	t.Run("NewJSONMessage", func(t *testing.T) {
-		// Test valid JSON message
+	t.Run("creates JSON message", func(t *testing.T) {
 		data := map[string]interface{}{
-			"name":   "test",
-			"age":    25,
-			"active": true,
+			"name": "test",
+			"age":  30,
 		}
+		msg, err := messaging.NewJSONMessage(data)
 
-		msg, err := messaging.NewJSONMessage(data, messaging.WithKey("test.key"))
 		assert.NoError(t, err)
+		assert.NotNil(t, msg)
 		assert.Equal(t, "application/json", msg.ContentType)
-		assert.Equal(t, "test.key", msg.Key)
-		assert.NotEmpty(t, msg.ID)
-		assert.NotZero(t, msg.Timestamp)
 
 		// Verify JSON content
 		var result map[string]interface{}
-		err = msg.UnmarshalTo(&result)
+		err = json.Unmarshal(msg.Body, &result)
 		assert.NoError(t, err)
-		// Note: JSON unmarshaling converts numbers to float64
 		assert.Equal(t, "test", result["name"])
-		assert.Equal(t, float64(25), result["age"])
-		assert.Equal(t, true, result["active"])
+		assert.Equal(t, float64(30), result["age"]) // JSON numbers are float64
+	})
 
-		// Test with nil data (should error)
-		msg, err = messaging.NewJSONMessage(nil)
+	t.Run("returns error for nil JSON message", func(t *testing.T) {
+		msg, err := messaging.NewJSONMessage(nil)
+
 		assert.Error(t, err)
 		assert.Nil(t, msg)
-		assert.Contains(t, err.Error(), "data cannot be nil")
-
-		// Test with complex data structure
-		complexData := struct {
-			Name    string `json:"name"`
-			Numbers []int  `json:"numbers"`
-			Nested  struct {
-				Value string `json:"value"`
-			} `json:"nested"`
-		}{
-			Name:    "test",
-			Numbers: []int{1, 2, 3},
-			Nested: struct {
-				Value string `json:"value"`
-			}{
-				Value: "nested-value",
-			},
-		}
-
-		msg, err = messaging.NewJSONMessage(complexData, messaging.WithKey("test.key"))
-		assert.NoError(t, err)
-
-		var result2 struct {
-			Name    string `json:"name"`
-			Numbers []int  `json:"numbers"`
-			Nested  struct {
-				Value string `json:"value"`
-			} `json:"nested"`
-		}
-		err = msg.UnmarshalTo(&result2)
-		assert.NoError(t, err)
-		assert.Equal(t, complexData, result2)
+		assert.Contains(t, err.Error(), "cannot create JSON message from nil value")
 	})
 
-	t.Run("MustNewJSONMessage", func(t *testing.T) {
-		// Test valid JSON message
+	t.Run("returns error for invalid JSON", func(t *testing.T) {
+		// Create a value that cannot be marshaled to JSON
+		invalidData := make(chan int)
+		msg, err := messaging.NewJSONMessage(invalidData)
+
+		assert.Error(t, err)
+		assert.Nil(t, msg)
+		assert.Contains(t, err.Error(), "failed to marshal JSON")
+	})
+}
+
+// TestMessage_Headers tests header operations
+func TestMessage_Headers(t *testing.T) {
+	t.Run("sets and gets headers", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		msg.SetHeader("key1", "value1")
+		msg.SetHeader("key2", 42)
+
+		value1, exists1 := msg.GetHeader("key1")
+		assert.True(t, exists1)
+		assert.Equal(t, "value1", value1)
+
+		value2, exists2 := msg.GetHeader("key2")
+		assert.True(t, exists2)
+		assert.Equal(t, 42, value2)
+
+		_, exists3 := msg.GetHeader("nonexistent")
+		assert.False(t, exists3)
+	})
+
+	t.Run("handles nil message for headers", func(t *testing.T) {
+		var msg *messaging.Message
+
+		msg.SetHeader("key", "value") // Should not panic
+
+		value, exists := msg.GetHeader("key")
+		assert.False(t, exists)
+		assert.Nil(t, value)
+	})
+
+	t.Run("gets all headers", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		msg.SetHeader("key1", "value1")
+		msg.SetHeader("key2", "value2")
+
+		headers := msg.GetAllHeaders()
+		assert.NotNil(t, headers)
+		assert.Equal(t, "value1", headers["key1"])
+		assert.Equal(t, "value2", headers["key2"])
+	})
+
+	t.Run("returns nil for nil message getAllHeaders", func(t *testing.T) {
+		var msg *messaging.Message
+		headers := msg.GetAllHeaders()
+		assert.Nil(t, headers)
+	})
+}
+
+// TestMessage_Metadata tests metadata operations
+func TestMessage_Metadata(t *testing.T) {
+	t.Run("sets and gets metadata", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		msg.SetMetadata("key1", "value1")
+		msg.SetMetadata("key2", 42)
+
+		value1, exists1 := msg.GetMetadata("key1")
+		assert.True(t, exists1)
+		assert.Equal(t, "value1", value1)
+
+		value2, exists2 := msg.GetMetadata("key2")
+		assert.True(t, exists2)
+		assert.Equal(t, 42, value2)
+
+		_, exists3 := msg.GetMetadata("nonexistent")
+		assert.False(t, exists3)
+	})
+
+	t.Run("handles nil message for metadata", func(t *testing.T) {
+		var msg *messaging.Message
+
+		msg.SetMetadata("key", "value") // Should not panic
+
+		value, exists := msg.GetMetadata("key")
+		assert.False(t, exists)
+		assert.Nil(t, value)
+	})
+
+	t.Run("gets all metadata", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		msg.SetMetadata("key1", "value1")
+		msg.SetMetadata("key2", "value2")
+
+		metadata := msg.GetAllMetadata()
+		assert.NotNil(t, metadata)
+		assert.Equal(t, "value1", metadata["key1"])
+		assert.Equal(t, "value2", metadata["key2"])
+	})
+
+	t.Run("returns nil for nil message getAllMetadata", func(t *testing.T) {
+		var msg *messaging.Message
+		metadata := msg.GetAllMetadata()
+		assert.Nil(t, metadata)
+	})
+}
+
+// TestMessage_Properties tests message property operations
+func TestMessage_Properties(t *testing.T) {
+	t.Run("sets priority", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		err := msg.SetPriority(messaging.PriorityHigh)
+		assert.NoError(t, err)
+		assert.Equal(t, messaging.PriorityHigh, msg.Priority)
+	})
+
+	t.Run("returns error for invalid priority", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		err := msg.SetPriority(messaging.MessagePriority(5))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid priority")
+	})
+
+	t.Run("handles nil message for priority", func(t *testing.T) {
+		var msg *messaging.Message
+		err := msg.SetPriority(messaging.PriorityHigh)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot set priority on nil message")
+	})
+
+	t.Run("sets TTL", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		ttl := 30 * time.Second
+		err := msg.SetTTL(ttl)
+		assert.NoError(t, err)
+		assert.Equal(t, ttl, msg.Properties.TTL)
+	})
+
+	t.Run("returns error for negative TTL", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		err := msg.SetTTL(-1 * time.Second)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "TTL cannot be negative")
+	})
+
+	t.Run("sets expiration", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		expiration := 60 * time.Second
+		err := msg.SetExpiration(expiration)
+		assert.NoError(t, err)
+		assert.Equal(t, expiration, msg.Properties.Expiration)
+	})
+
+	t.Run("returns error for negative expiration", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		err := msg.SetExpiration(-1 * time.Second)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "expiration cannot be negative")
+	})
+
+	t.Run("sets other properties", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		msg.SetPersistent(true)
+		msg.SetRoutingKey("test.key")
+		msg.SetExchange("test.exchange")
+		msg.SetQueue("test.queue")
+		msg.SetCorrelationID("corr-123")
+		msg.SetReplyTo("reply.queue")
+
+		assert.True(t, msg.Properties.Persistent)
+		assert.Equal(t, "test.key", msg.Properties.RoutingKey)
+		assert.Equal(t, "test.exchange", msg.Properties.Exchange)
+		assert.Equal(t, "test.queue", msg.Properties.Queue)
+		assert.Equal(t, "corr-123", msg.Properties.CorrelationID)
+		assert.Equal(t, "reply.queue", msg.Properties.ReplyTo)
+	})
+
+	t.Run("handles nil message for properties", func(t *testing.T) {
+		var msg *messaging.Message
+
+		msg.SetPersistent(true)     // Should not panic
+		msg.SetRoutingKey("key")    // Should not panic
+		msg.SetExchange("exchange") // Should not panic
+		msg.SetQueue("queue")       // Should not panic
+		msg.SetCorrelationID("id")  // Should not panic
+		msg.SetReplyTo("reply")     // Should not panic
+	})
+}
+
+// TestMessage_JSON tests JSON serialization/deserialization
+func TestMessage_JSON(t *testing.T) {
+	t.Run("converts message to JSON", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test message"))
+		msg.SetHeader("test-header", "test-value")
+		msg.SetMetadata("test-metadata", "test-value")
+
+		jsonData, err := msg.ToJSON()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, jsonData)
+
+		// Verify it's valid JSON
+		var result map[string]interface{}
+		err = json.Unmarshal(jsonData, &result)
+		assert.NoError(t, err)
+		// Body is base64 encoded in JSON
+		assert.Equal(t, "dGVzdCBtZXNzYWdl", result["body"])
+	})
+
+	t.Run("returns error for nil message toJSON", func(t *testing.T) {
+		var msg *messaging.Message
+		jsonData, err := msg.ToJSON()
+		assert.Error(t, err)
+		assert.Nil(t, jsonData)
+		assert.Contains(t, err.Error(), "cannot convert nil message to JSON")
+	})
+
+	t.Run("creates message from JSON", func(t *testing.T) {
+		originalMsg := messaging.NewMessage([]byte("test message"))
+		originalMsg.SetHeader("test-header", "test-value")
+		originalMsg.SetMetadata("test-metadata", "test-value")
+
+		jsonData, err := originalMsg.ToJSON()
+		require.NoError(t, err)
+
+		msg, err := messaging.FromJSON(jsonData)
+		assert.NoError(t, err)
+		assert.NotNil(t, msg)
+		assert.Equal(t, originalMsg.ID, msg.ID)
+		assert.Equal(t, originalMsg.Body, msg.Body)
+		assert.Equal(t, originalMsg.ContentType, msg.ContentType)
+		assert.Equal(t, originalMsg.Encoding, msg.Encoding)
+	})
+
+	t.Run("returns error for empty JSON data", func(t *testing.T) {
+		msg, err := messaging.FromJSON([]byte{})
+		assert.Error(t, err)
+		assert.Nil(t, msg)
+		assert.Contains(t, err.Error(), "cannot create message from empty JSON data")
+	})
+
+	t.Run("returns error for invalid JSON", func(t *testing.T) {
+		msg, err := messaging.FromJSON([]byte("invalid json"))
+		assert.Error(t, err)
+		assert.Nil(t, msg)
+		assert.Contains(t, err.Error(), "failed to unmarshal message from JSON")
+	})
+}
+
+// TestMessage_Clone tests message cloning
+func TestMessage_Clone(t *testing.T) {
+	t.Run("clones message with all properties", func(t *testing.T) {
+		original := messaging.NewMessage([]byte("test message"))
+		original.SetHeader("header1", "value1")
+		original.SetMetadata("metadata1", "value1")
+		original.SetPriority(messaging.PriorityHigh)
+		original.SetTTL(30 * time.Second)
+		original.SetExpiration(60 * time.Second)
+		original.SetPersistent(true)
+		original.SetRoutingKey("test.key")
+		original.SetExchange("test.exchange")
+		original.SetQueue("test.queue")
+		original.SetCorrelationID("corr-123")
+		original.SetReplyTo("reply.queue")
+
+		clone := original.Clone()
+
+		assert.NotNil(t, clone)
+		assert.Equal(t, original.ID, clone.ID)
+		assert.Equal(t, original.Body, clone.Body)
+		assert.Equal(t, original.Priority, clone.Priority)
+		assert.Equal(t, original.ContentType, clone.ContentType)
+		assert.Equal(t, original.Encoding, clone.Encoding)
+		assert.Equal(t, original.Properties, clone.Properties)
+
+		// Verify headers and metadata are copied
+		headers := clone.GetAllHeaders()
+		assert.Equal(t, "value1", headers["header1"])
+
+		metadata := clone.GetAllMetadata()
+		assert.Equal(t, "value1", metadata["metadata1"])
+
+		// Verify it's a deep copy (modifying clone doesn't affect original)
+		clone.SetHeader("header2", "value2")
+		originalHeaders := original.GetAllHeaders()
+		_, exists := originalHeaders["header2"]
+		assert.False(t, exists)
+	})
+
+	t.Run("returns nil for nil message clone", func(t *testing.T) {
+		var msg *messaging.Message
+		clone := msg.Clone()
+		assert.Nil(t, clone)
+	})
+}
+
+// TestMessage_Validation tests message validation
+func TestMessage_Validation(t *testing.T) {
+	t.Run("validates valid message", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		err := msg.Validate()
+		assert.NoError(t, err)
+	})
+
+	t.Run("returns error for nil message validation", func(t *testing.T) {
+		var msg *messaging.Message
+		err := msg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "message is nil")
+	})
+
+	t.Run("returns error for empty ID", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		msg.ID = ""
+		err := msg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "message ID cannot be empty")
+	})
+
+	t.Run("returns error for invalid priority", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		msg.Priority = messaging.MessagePriority(5)
+		err := msg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid priority")
+	})
+
+	t.Run("returns error for negative TTL", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		msg.Properties.TTL = -1 * time.Second
+		err := msg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "TTL cannot be negative")
+	})
+
+	t.Run("returns error for negative expiration", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		msg.Properties.Expiration = -1 * time.Second
+		err := msg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "expiration cannot be negative")
+	})
+
+	t.Run("returns error for empty content type", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		msg.ContentType = ""
+		err := msg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "content type cannot be empty")
+	})
+
+	t.Run("returns error for empty encoding", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		msg.Encoding = ""
+		err := msg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "encoding cannot be empty")
+	})
+}
+
+// TestMessage_Size tests message size calculation
+func TestMessage_Size(t *testing.T) {
+	t.Run("calculates size correctly", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		msg.SetHeader("header1", "value1")
+		msg.SetMetadata("metadata1", "value1")
+
+		size := msg.Size()
+		assert.Greater(t, size, 0)
+		assert.Equal(t, len("test")+len("header1")+len("value1")+len("metadata1")+len("value1"), size)
+	})
+
+	t.Run("caches size calculation", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		size1 := msg.Size()
+		size2 := msg.Size()
+		assert.Equal(t, size1, size2)
+
+		// Modify message to invalidate cache
+		msg.SetHeader("new", "header")
+		size3 := msg.Size()
+		assert.Greater(t, size3, size1)
+	})
+
+	t.Run("returns 0 for nil message size", func(t *testing.T) {
+		var msg *messaging.Message
+		size := msg.Size()
+		assert.Equal(t, 0, size)
+	})
+}
+
+// TestMessage_Utility tests utility methods
+func TestMessage_Utility(t *testing.T) {
+	t.Run("string representation", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		str := msg.String()
+
+		assert.Contains(t, str, "Message{")
+		assert.Contains(t, str, msg.ID)
+		assert.Contains(t, str, "4 bytes") // len("test")
+		assert.Contains(t, str, fmt.Sprintf("%d", msg.Priority))
+	})
+
+	t.Run("returns nil string for nil message", func(t *testing.T) {
+		var msg *messaging.Message
+		str := msg.String()
+		assert.Equal(t, "Message{nil}", str)
+	})
+
+	t.Run("checks if empty", func(t *testing.T) {
+		msg1 := messaging.NewMessage([]byte("test"))
+		assert.False(t, msg1.IsEmpty())
+
+		msg2 := messaging.NewMessage([]byte{})
+		assert.True(t, msg2.IsEmpty())
+
+		var msg3 *messaging.Message
+		assert.True(t, msg3.IsEmpty())
+	})
+}
+
+// TestMessageBuilder tests the message builder pattern
+func TestMessageBuilder(t *testing.T) {
+	t.Run("builds message with all properties", func(t *testing.T) {
+		builder := messaging.NewMessageBuilder()
+
+		msg, err := builder.
+			WithBody([]byte("test body")).
+			WithHeader("header1", "value1").
+			WithMetadata("metadata1", "value1").
+			WithPriority(messaging.PriorityHigh).
+			WithTTL(30 * time.Second).
+			WithExpiration(60 * time.Second).
+			WithRoutingKey("test.key").
+			WithExchange("test.exchange").
+			WithQueue("test.queue").
+			WithCorrelationID("corr-123").
+			WithReplyTo("reply.queue").
+			WithPersistent(true).
+			Build()
+
+		assert.NoError(t, err)
+		assert.NotNil(t, msg)
+		assert.Equal(t, []byte("test body"), msg.Body)
+		assert.Equal(t, "value1", msg.Headers["header1"])
+		assert.Equal(t, "value1", msg.Metadata["metadata1"])
+		assert.Equal(t, messaging.PriorityHigh, msg.Priority)
+		assert.Equal(t, 30*time.Second, msg.Properties.TTL)
+		assert.Equal(t, 60*time.Second, msg.Properties.Expiration)
+		assert.Equal(t, "test.key", msg.Properties.RoutingKey)
+		assert.Equal(t, "test.exchange", msg.Properties.Exchange)
+		assert.Equal(t, "test.queue", msg.Properties.Queue)
+		assert.Equal(t, "corr-123", msg.Properties.CorrelationID)
+		assert.Equal(t, "reply.queue", msg.Properties.ReplyTo)
+		assert.True(t, msg.Properties.Persistent)
+	})
+
+	t.Run("builds text message", func(t *testing.T) {
+		builder := messaging.NewMessageBuilder()
+
+		msg, err := builder.
+			WithTextBody("hello world").
+			Build()
+
+		assert.NoError(t, err)
+		assert.NotNil(t, msg)
+		assert.Equal(t, []byte("hello world"), msg.Body)
+		assert.Equal(t, "text/plain", msg.ContentType)
+	})
+
+	t.Run("builds JSON message", func(t *testing.T) {
+		builder := messaging.NewMessageBuilder()
+
 		data := map[string]interface{}{
 			"name": "test",
-			"age":  25,
+			"age":  30,
 		}
 
-		msg := messaging.MustNewJSONMessage(data, messaging.WithKey("test.key"))
+		msg, err := builder.
+			WithJSONBody(data).
+			Build()
+
+		assert.NoError(t, err)
+		assert.NotNil(t, msg)
 		assert.Equal(t, "application/json", msg.ContentType)
-		assert.Equal(t, "test.key", msg.Key)
 
-		// Test with nil data (should panic)
-		assert.Panics(t, func() {
-			messaging.MustNewJSONMessage(nil)
-		})
+		// Verify JSON content
+		var result map[string]interface{}
+		err = json.Unmarshal(msg.Body, &result)
+		assert.NoError(t, err)
+		assert.Equal(t, "test", result["name"])
+		assert.Equal(t, float64(30), result["age"])
+	})
 
-		// Test with unmarshalable data (should panic)
-		unmarshalableData := make(chan int) // Channels can't be marshaled to JSON
-		assert.Panics(t, func() {
-			messaging.MustNewJSONMessage(unmarshalableData)
-		})
+	t.Run("handles JSON marshaling error", func(t *testing.T) {
+		builder := messaging.NewMessageBuilder()
+
+		// Create a value that cannot be marshaled to JSON
+		invalidData := make(chan int)
+
+		msg, err := builder.
+			WithJSONBody(invalidData).
+			Build()
+
+		assert.NoError(t, err) // Builder should not fail, error is stored in metadata
+		assert.NotNil(t, msg)
+		assert.Contains(t, msg.Metadata, "json_error")
+	})
+
+	t.Run("validates message during build", func(t *testing.T) {
+		builder := messaging.NewMessageBuilder()
+
+		// Create invalid message with invalid priority
+		msg, err := builder.
+			WithBody([]byte("test")).
+			WithPriority(messaging.MessagePriority(5)).
+			Build()
+
+		assert.Error(t, err)
+		assert.Nil(t, msg)
+		assert.Contains(t, err.Error(), "invalid priority")
 	})
 }
 
-func TestDeliveryStructure(t *testing.T) {
-	t.Run("DeliveryCreation", func(t *testing.T) {
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-		)
+// TestBatchMessage tests batch message functionality
+func TestBatchMessage(t *testing.T) {
+	t.Run("creates batch message", func(t *testing.T) {
+		msg1 := messaging.NewMessage([]byte("message 1"))
+		msg2 := messaging.NewMessage([]byte("message 2"))
+		msg3 := messaging.NewMessage([]byte("message 3"))
 
-		delivery := messaging.Delivery{
-			Message:       *msg,
-			DeliveryTag:   12345,
-			Exchange:      "test.exchange",
-			RoutingKey:    "test.key",
-			Queue:         "test.queue",
-			Redelivered:   true,
-			DeliveryCount: 2,
-			ConsumerTag:   "test-consumer",
-		}
+		batch := messaging.NewBatchMessage([]*messaging.Message{msg1, msg2, msg3})
 
-		assert.Equal(t, *msg, delivery.Message)
-		assert.Equal(t, uint64(12345), delivery.DeliveryTag)
-		assert.Equal(t, "test.exchange", delivery.Exchange)
-		assert.Equal(t, "test.key", delivery.RoutingKey)
-		assert.Equal(t, "test.queue", delivery.Queue)
-		assert.True(t, delivery.Redelivered)
-		assert.Equal(t, 2, delivery.DeliveryCount)
-		assert.Equal(t, "test-consumer", delivery.ConsumerTag)
+		assert.NotNil(t, batch)
+		assert.Equal(t, 3, batch.Count())
+		assert.False(t, batch.IsEmpty())
+		assert.Greater(t, batch.Size, 0)
+		assert.False(t, batch.Created.IsZero())
 	})
 
-	t.Run("DeliveryString", func(t *testing.T) {
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithID("test-123"),
-		)
+	t.Run("creates empty batch message", func(t *testing.T) {
+		batch := messaging.NewBatchMessage([]*messaging.Message{})
 
-		delivery := messaging.Delivery{
-			Message:       *msg,
-			DeliveryTag:   12345,
-			Exchange:      "test.exchange",
-			RoutingKey:    "test.key",
-			Queue:         "test.queue",
-			Redelivered:   true,
-			DeliveryCount: 2,
-			ConsumerTag:   "test-consumer",
-		}
-
-		str := delivery.String()
-
-		// Verify string contains expected fields
-		assert.Contains(t, str, "Delivery{")
-		assert.Contains(t, str, "Exchange:test.exchange")
-		assert.Contains(t, str, "RoutingKey:test.key")
-		assert.Contains(t, str, "Queue:test.queue")
-		assert.Contains(t, str, "DeliveryTag:12345")
-		assert.Contains(t, str, "Redelivered:true")
-		assert.Contains(t, str, "Message:")
+		assert.NotNil(t, batch)
+		assert.Equal(t, 0, batch.Count())
+		assert.True(t, batch.IsEmpty())
+		assert.Equal(t, 0, batch.Size)
 	})
 
-	t.Run("DeliveryValidation", func(t *testing.T) {
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-		)
+	t.Run("adds message to batch", func(t *testing.T) {
+		batch := messaging.NewBatchMessage([]*messaging.Message{})
+		msg := messaging.NewMessage([]byte("new message"))
 
-		// Test valid delivery
-		delivery := messaging.Delivery{
-			Message:     *msg,
-			DeliveryTag: 12345,
-			Exchange:    "test.exchange",
-			RoutingKey:  "test.key",
-			Queue:       "test.queue",
-			ConsumerTag: "test-consumer",
-		}
+		initialSize := batch.Size
+		batch.AddMessage(msg)
 
-		// Should not panic
-		_ = delivery.String()
+		assert.Equal(t, 1, batch.Count())
+		assert.False(t, batch.IsEmpty())
+		assert.Greater(t, batch.Size, initialSize)
+	})
 
-		// Test with zero delivery tag (invalid)
-		delivery.DeliveryTag = 0
-		// Should still work for string representation
-		_ = delivery.String()
+	t.Run("handles nil message in add", func(t *testing.T) {
+		batch := messaging.NewBatchMessage([]*messaging.Message{})
+		initialCount := batch.Count()
 
-		// Test with empty exchange (invalid)
-		delivery.Exchange = ""
-		_ = delivery.String()
+		batch.AddMessage(nil)
 
-		// Test with empty routing key (invalid)
-		delivery.RoutingKey = ""
-		_ = delivery.String()
+		assert.Equal(t, initialCount, batch.Count())
+	})
 
-		// Test with empty queue (invalid)
-		delivery.Queue = ""
-		_ = delivery.String()
+	t.Run("handles nil batch in add", func(t *testing.T) {
+		var batch *messaging.BatchMessage
+		msg := messaging.NewMessage([]byte("test"))
 
-		// Test with empty consumer tag (invalid)
-		delivery.ConsumerTag = ""
-		_ = delivery.String()
+		batch.AddMessage(msg) // Should not panic
+	})
+
+	t.Run("clears batch", func(t *testing.T) {
+		msg1 := messaging.NewMessage([]byte("message 1"))
+		msg2 := messaging.NewMessage([]byte("message 2"))
+		batch := messaging.NewBatchMessage([]*messaging.Message{msg1, msg2})
+
+		assert.Equal(t, 2, batch.Count())
+		assert.False(t, batch.IsEmpty())
+
+		batch.Clear()
+
+		assert.Equal(t, 0, batch.Count())
+		assert.True(t, batch.IsEmpty())
+		assert.Equal(t, 0, batch.Size)
+	})
+
+	t.Run("handles nil batch in clear", func(t *testing.T) {
+		var batch *messaging.BatchMessage
+		batch.Clear() // Should not panic
+	})
+
+	t.Run("handles nil batch in isEmpty", func(t *testing.T) {
+		var batch *messaging.BatchMessage
+		assert.True(t, batch.IsEmpty())
+	})
+
+	t.Run("handles nil batch in count", func(t *testing.T) {
+		var batch *messaging.BatchMessage
+		assert.Equal(t, 0, batch.Count())
 	})
 }
 
-func TestHelperFunctions(t *testing.T) {
-	t.Run("GenerateMessageID", func(t *testing.T) {
-		// Test multiple ID generation
-		ids := make(map[string]bool)
-		for i := 0; i < 100; i++ {
-			msg := messaging.NewMessage([]byte("test"), messaging.WithKey("test.key"))
-			id := msg.ID
-
-			// Verify ID format
-			assert.Regexp(t, regexp.MustCompile(`^msg-[a-f0-9]+$`), id)
-			assert.NotEmpty(t, id)
-
-			// Verify uniqueness
-			assert.False(t, ids[id], "Duplicate ID generated: %s", id)
-			ids[id] = true
-		}
-	})
-
-	t.Run("ValidateMessage", func(t *testing.T) {
-		// Test valid message
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-		)
-
-		// This should not panic
-		_ = msg.String()
-
-		// Test nil message
-		var nilMsg *messaging.Message
-		// This should handle nil gracefully
-		_ = nilMsg
-	})
-
-	t.Run("ValidationRegexFunctions", func(t *testing.T) {
-		// Test message ID validation through actual message creation
-		validIDs := []string{"valid-id", "valid_id", "valid123", "VALID-ID", "valid-id-123"}
-
-		for _, id := range validIDs {
-			msg := messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithID(id),
-			)
-			assert.Equal(t, id, msg.ID)
-		}
-
-		// Test routing key validation through actual message creation
-		validKeys := []string{"valid.key", "valid_key", "valid123", "VALID.KEY", "valid.key-123"}
-
-		for _, key := range validKeys {
-			msg := messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey(key),
-			)
-			assert.Equal(t, key, msg.Key)
-		}
-
-		// Test content type validation through actual message creation
-		validContentTypes := []string{
-			"application/json",
-			"application/xml",
-			"text/plain",
-			"text/html",
-			"application/octet-stream",
-			"application/protobuf",
-			"application/avro",
-		}
-
-		for _, contentType := range validContentTypes {
-			msg := messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithContentType(contentType),
-			)
-			assert.Equal(t, contentType, msg.ContentType)
-		}
-
-		// Test correlation ID validation through actual message creation
-		validCorrelationIDs := []string{"corr-id", "corr_id", "corr123", "CORR-ID", "corr-id-123", ""}
-
-		for _, id := range validCorrelationIDs {
-			msg := messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithCorrelationID(id),
-			)
-			assert.Equal(t, id, msg.CorrelationID)
-		}
-
-		// Test reply-to validation through actual message creation
-		validReplyTos := []string{"reply.queue", "reply_queue", "reply123", "REPLY.QUEUE", "reply.queue-123", ""}
-
-		for _, replyTo := range validReplyTos {
-			msg := messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithReplyTo(replyTo),
-			)
-			assert.Equal(t, replyTo, msg.ReplyTo)
-		}
-
-		// Test idempotency key validation through actual message creation
-		validIdempotencyKeys := []string{"idemp-key", "idemp_key", "idemp123", "IDEMP-KEY", "idemp-key-123", ""}
-
-		for _, key := range validIdempotencyKeys {
-			msg := messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithIdempotencyKey(key),
-			)
-			assert.Equal(t, key, msg.IdempotencyKey)
-		}
-	})
-}
-
-func TestEdgeCasesAndErrorScenarios(t *testing.T) {
-	t.Run("ConcurrentMessageCreation", func(t *testing.T) {
-		const numGoroutines = 100
-		const messagesPerGoroutine = 10
-
+// TestMessage_Concurrency tests concurrent access to message
+func TestMessage_Concurrency(t *testing.T) {
+	t.Run("concurrent header operations", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
 		var wg sync.WaitGroup
-		ids := make(chan string, numGoroutines*messagesPerGoroutine)
+		numGoroutines := 10
 
-		wg.Add(numGoroutines)
+		// Test concurrent header writes
 		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < messagesPerGoroutine; j++ {
-					msg := messaging.NewMessage(
-						[]byte(fmt.Sprintf("message from goroutine %d, message %d", id, j)),
-						messaging.WithKey(fmt.Sprintf("key.%d.%d", id, j)),
-					)
-					ids <- msg.ID
-				}
+				msg.SetHeader(fmt.Sprintf("key%d", id), fmt.Sprintf("value%d", id))
+			}(i)
+		}
+
+		// Test concurrent header reads
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				msg.GetHeader(fmt.Sprintf("key%d", id))
 			}(i)
 		}
 
 		wg.Wait()
-		close(ids)
 
-		// Verify all IDs are unique
-		seenIDs := make(map[string]bool)
-		for id := range ids {
-			assert.False(t, seenIDs[id], "Duplicate ID generated: %s", id)
-			seenIDs[id] = true
-		}
-
-		assert.Equal(t, numGoroutines*messagesPerGoroutine, len(seenIDs))
+		// Verify all headers were set
+		headers := msg.GetAllHeaders()
+		assert.Len(t, headers, numGoroutines)
 	})
 
-	t.Run("LargeHeaderSets", func(t *testing.T) {
-		// Test with maximum allowed headers
-		headers := make(map[string]string)
-		for i := 0; i < 100; i++ {
-			headers[fmt.Sprintf("key%d", i)] = fmt.Sprintf("value%d", i)
+	t.Run("concurrent metadata operations", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		var wg sync.WaitGroup
+		numGoroutines := 10
+
+		// Test concurrent metadata writes
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				msg.SetMetadata(fmt.Sprintf("key%d", id), fmt.Sprintf("value%d", id))
+			}(i)
 		}
 
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithHeaders(headers),
-		)
+		// Test concurrent metadata reads
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				msg.GetMetadata(fmt.Sprintf("key%d", id))
+			}(i)
+		}
 
-		assert.Len(t, msg.Headers, 100)
+		wg.Wait()
 
-		// Test adding one more header (should panic)
-		headers["extra"] = "value"
-		assert.Panics(t, func() {
-			messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithHeaders(headers),
-			)
-		})
+		// Verify all metadata was set
+		metadata := msg.GetAllMetadata()
+		assert.Len(t, metadata, numGoroutines)
 	})
 
-	t.Run("LargeMessageBody", func(t *testing.T) {
-		// Test with maximum allowed message size
-		largeBody := make([]byte, messaging.MaxMessageSize)
+	t.Run("concurrent size calculations", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+		var wg sync.WaitGroup
+		numGoroutines := 10
+
+		// Test concurrent size calculations
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				size := msg.Size()
+				assert.Greater(t, size, 0)
+			}()
+		}
+
+		wg.Wait()
+	})
+}
+
+// TestMessage_EdgeCases tests edge cases and boundary conditions
+func TestMessage_EdgeCases(t *testing.T) {
+	t.Run("message with very large body", func(t *testing.T) {
+		largeBody := make([]byte, 1024*1024) // 1MB
 		for i := range largeBody {
 			largeBody[i] = byte(i % 256)
 		}
 
-		msg := messaging.NewMessage(
-			largeBody,
-			messaging.WithKey("test.key"),
-		)
-
-		assert.Equal(t, messaging.MaxMessageSize, len(msg.Body))
-
-		// Test with body larger than maximum (should panic)
-		tooLargeBody := make([]byte, messaging.MaxMessageSize+1)
-		assert.Panics(t, func() {
-			messaging.NewMessage(
-				tooLargeBody,
-				messaging.WithKey("test.key"),
-			)
-		})
+		msg := messaging.NewMessage(largeBody)
+		assert.NotNil(t, msg)
+		assert.Equal(t, len(largeBody), len(msg.Body))
+		assert.Equal(t, len(largeBody), msg.Size())
 	})
 
-	t.Run("InvalidJSONScenarios", func(t *testing.T) {
-		// Test with circular reference (should panic)
-		type CircularStruct struct {
-			Self *CircularStruct `json:"self"`
+	t.Run("message with many headers", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		// Add many headers
+		for i := 0; i < 1000; i++ {
+			msg.SetHeader(fmt.Sprintf("header%d", i), fmt.Sprintf("value%d", i))
 		}
 
-		circular := &CircularStruct{}
-		circular.Self = circular
-
-		assert.Panics(t, func() {
-			messaging.MustNewJSONMessage(circular)
-		})
-
-		// Test with function (should panic)
-		funcData := func() {}
-		assert.Panics(t, func() {
-			messaging.MustNewJSONMessage(funcData)
-		})
+		headers := msg.GetAllHeaders()
+		assert.Len(t, headers, 1000)
+		assert.Greater(t, msg.Size(), 1000) // Should include header sizes
 	})
 
-	t.Run("ExpirationEdgeCases", func(t *testing.T) {
-		// Test with very short expiration
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithExpiration(1*time.Nanosecond),
-		)
+	t.Run("message with many metadata entries", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
 
-		// Should be expired after a short delay
-		time.Sleep(1 * time.Millisecond)
-		assert.True(t, msg.IsExpired())
-
-		// Test with very long expiration (but within limits)
-		msg = messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithExpiration(30*time.Minute),
-		)
-
-		assert.False(t, msg.IsExpired())
-
-		// Test with negative expiration (should panic)
-		assert.Panics(t, func() {
-			messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithExpiration(-time.Hour),
-			)
-		})
-	})
-
-	t.Run("MessageSizeOverflow", func(t *testing.T) {
-		// Test size calculation with very large headers
-		headers := make(map[string]string)
-		largeValue := string(make([]byte, 1000))
-
-		for i := 0; i < 50; i++ {
-			headers[fmt.Sprintf("key%d", i)] = largeValue
+		// Add many metadata entries
+		for i := 0; i < 1000; i++ {
+			msg.SetMetadata(fmt.Sprintf("meta%d", i), fmt.Sprintf("value%d", i))
 		}
 
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithHeaders(headers),
-		)
+		metadata := msg.GetAllMetadata()
+		assert.Len(t, metadata, 1000)
+		assert.Greater(t, msg.Size(), 1000) // Should include metadata sizes
+	})
 
-		size := msg.Size()
-		// Size calculation may return -1 on overflow
-		if size == -1 {
-			// Overflow occurred, which is expected for large messages
-			assert.True(t, true, "Size overflow occurred as expected")
-		} else {
-			assert.Greater(t, size, 0)
-			assert.Less(t, size, 1000000) // Should not overflow
+	t.Run("message with special characters in headers", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
+
+		specialChars := []string{
+			"key with spaces",
+			"key-with-dashes",
+			"key_with_underscores",
+			"key.with.dots",
+			"key/with/slashes",
+			"key\\with\\backslashes",
+			"key:with:colons",
+			"key;with;semicolons",
+		}
+
+		for i, key := range specialChars {
+			msg.SetHeader(key, fmt.Sprintf("value%d", i))
+		}
+
+		headers := msg.GetAllHeaders()
+		assert.Len(t, headers, len(specialChars))
+
+		for i, key := range specialChars {
+			value, exists := msg.GetHeader(key)
+			assert.True(t, exists)
+			assert.Equal(t, fmt.Sprintf("value%d", i), value)
 		}
 	})
 
-	t.Run("NilMessageHandling", func(t *testing.T) {
-		// Test that nil message handling doesn't panic
-		var nilMsg *messaging.Message
+	t.Run("message with complex data types in headers", func(t *testing.T) {
+		msg := messaging.NewMessage([]byte("test"))
 
-		// These should handle nil gracefully
-		_ = nilMsg
+		// Test various data types
+		msg.SetHeader("string", "test")
+		msg.SetHeader("int", 42)
+		msg.SetHeader("float", 3.14)
+		msg.SetHeader("bool", true)
+		msg.SetHeader("slice", []string{"a", "b", "c"})
+		msg.SetHeader("map", map[string]interface{}{"key": "value"})
 
-		// Test nil message options
-		messaging.WithID("test")(nil)
-		messaging.WithKey("test")(nil)
-		messaging.WithHeaders(nil)(nil)
-		messaging.WithHeader("key", "value")(nil)
-		messaging.WithContentType("application/json")(nil)
-		messaging.WithTimestamp(time.Now())(nil)
-		messaging.WithPriority(5)(nil)
-		messaging.WithIdempotencyKey("key")(nil)
-		messaging.WithCorrelationID("corr")(nil)
-		messaging.WithReplyTo("reply")(nil)
-		messaging.WithExpiration(time.Hour)(nil)
-	})
+		headers := msg.GetAllHeaders()
+		assert.Len(t, headers, 6)
 
-	t.Run("EmptyAndNilBodyHandling", func(t *testing.T) {
-		// Test empty body (should panic)
-		assert.Panics(t, func() {
-			messaging.NewMessage([]byte{}, messaging.WithKey("test.key"))
-		})
-
-		// Test nil body (should panic)
-		assert.Panics(t, func() {
-			messaging.NewMessage(nil, messaging.WithKey("test.key"))
-		})
-	})
-
-	t.Run("InvalidMessageOptions", func(t *testing.T) {
-		// Test with invalid content type
-		assert.Panics(t, func() {
-			messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithContentType("invalid/type"),
-			)
-		})
-
-		// Test with invalid message ID format
-		assert.Panics(t, func() {
-			messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("test.key"),
-				messaging.WithID("invalid@id"),
-			)
-		})
-
-		// Test with invalid routing key format
-		assert.Panics(t, func() {
-			messaging.NewMessage(
-				[]byte("test body"),
-				messaging.WithKey("invalid@key"),
-			)
-		})
+		// Verify types are preserved
+		assert.Equal(t, "test", headers["string"])
+		assert.Equal(t, 42, headers["int"])
+		assert.Equal(t, 3.14, headers["float"])
+		assert.Equal(t, true, headers["bool"])
+		assert.Equal(t, []string{"a", "b", "c"}, headers["slice"])
+		assert.Equal(t, map[string]interface{}{"key": "value"}, headers["map"])
 	})
 }
 
-func TestIntegrationScenarios(t *testing.T) {
-	t.Run("MessageLifecycle", func(t *testing.T) {
+// TestMessage_Integration tests integration scenarios
+func TestMessage_Integration(t *testing.T) {
+	t.Run("full message lifecycle", func(t *testing.T) {
 		// Create message
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-			messaging.WithID("test-123"),
-			messaging.WithHeaders(map[string]string{"key1": "value1"}),
-			messaging.WithContentType("application/json"),
-			messaging.WithPriority(5),
-			messaging.WithCorrelationID("corr-123"),
-			messaging.WithIdempotencyKey("idemp-123"),
-			messaging.WithReplyTo("reply.queue"),
-			messaging.WithExpiration(5*time.Minute),
-		)
+		msg := messaging.NewMessage([]byte("integration test"))
+		msg.SetHeader("source", "test")
+		msg.SetMetadata("version", "1.0")
+		msg.SetPriority(messaging.PriorityHigh)
+		msg.SetTTL(30 * time.Second)
+		msg.SetPersistent(true)
+		msg.SetRoutingKey("test.key")
+		msg.SetExchange("test.exchange")
 
-		// Clone message
-		cloned := msg.Clone()
-		assert.Equal(t, msg.ID, cloned.ID)
-		assert.Equal(t, msg.Body, cloned.Body)
-		assert.Equal(t, msg.Headers, cloned.Headers)
+		// Validate
+		err := msg.Validate()
+		assert.NoError(t, err)
 
-		// Check size
+		// Clone
+		clone := msg.Clone()
+		assert.NotNil(t, clone)
+		assert.Equal(t, msg.ID, clone.ID)
+		assert.Equal(t, msg.Body, clone.Body)
+
+		// Convert to JSON
+		jsonData, err := msg.ToJSON()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, jsonData)
+
+		// Create from JSON
+		msgFromJSON, err := messaging.FromJSON(jsonData)
+		assert.NoError(t, err)
+		assert.NotNil(t, msgFromJSON)
+		assert.Equal(t, msg.ID, msgFromJSON.ID)
+		assert.Equal(t, msg.Body, msgFromJSON.Body)
+
+		// Verify size calculation
 		size := msg.Size()
-		// Size calculation may return -1 on overflow
-		if size == -1 {
-			// Overflow occurred, which is expected for large messages
-			assert.True(t, true, "Size overflow occurred as expected")
-		} else {
-			assert.Greater(t, size, 0)
-		}
+		assert.Greater(t, size, 0)
 
-		// Check expiration
-		assert.False(t, msg.IsExpired())
-
-		// Check headers
-		assert.True(t, msg.HasHeader("key1"))
-		value, exists := msg.GetHeader("key1")
-		assert.True(t, exists)
-		assert.Equal(t, "value1", value)
-
-		// Get text representation
-		text := msg.Text()
-		assert.Equal(t, "test body", text)
-
-		// Get string representation
+		// Verify string representation
 		str := msg.String()
-		assert.Contains(t, str, "test-123")
-		assert.Contains(t, str, "test.key")
+		assert.Contains(t, str, msg.ID)
+		assert.Contains(t, str, "16 bytes") // Body length, not content
 	})
 
-	t.Run("JSONMessageLifecycle", func(t *testing.T) {
-		// Create JSON data
-		data := map[string]interface{}{
-			"name":   "test",
-			"age":    25,
-			"active": true,
-		}
+	t.Run("message builder integration", func(t *testing.T) {
+		// Build complex message
+		msg, err := messaging.NewMessageBuilder().
+			WithTextBody("Hello, World!").
+			WithHeader("content-type", "text/plain").
+			WithMetadata("source", "integration-test").
+			WithPriority(messaging.PriorityHigh).
+			WithTTL(5 * time.Minute).
+			WithExpiration(10 * time.Minute).
+			WithRoutingKey("hello.world").
+			WithExchange("messages").
+			WithQueue("hello-queue").
+			WithCorrelationID("corr-123").
+			WithReplyTo("reply-queue").
+			WithPersistent(true).
+			Build()
 
-		// Create JSON message
-		msg, err := messaging.NewJSONMessage(data, messaging.WithKey("test.key"))
 		assert.NoError(t, err)
-		assert.Equal(t, "application/json", msg.ContentType)
+		assert.NotNil(t, msg)
 
-		// Unmarshal back to data
-		var result map[string]interface{}
-		err = msg.UnmarshalTo(&result)
+		// Validate
+		err = msg.Validate()
 		assert.NoError(t, err)
-		// Note: JSON unmarshaling converts numbers to float64
-		assert.Equal(t, "test", result["name"])
-		assert.Equal(t, float64(25), result["age"])
-		assert.Equal(t, true, result["active"])
 
-		// Clone and verify
-		cloned := msg.Clone()
-		err = cloned.UnmarshalTo(&result)
-		assert.NoError(t, err)
-		// Note: JSON unmarshaling converts numbers to float64
-		assert.Equal(t, "test", result["name"])
-		assert.Equal(t, float64(25), result["age"])
-		assert.Equal(t, true, result["active"])
-	})
-
-	t.Run("DeliveryLifecycle", func(t *testing.T) {
-		// Create message
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("test.key"),
-		)
-
-		// Create delivery
-		delivery := messaging.Delivery{
-			Message:       *msg,
-			DeliveryTag:   12345,
-			Exchange:      "test.exchange",
-			RoutingKey:    "test.key",
-			Queue:         "test.queue",
-			Redelivered:   true,
-			DeliveryCount: 2,
-			ConsumerTag:   "test-consumer",
-		}
-
-		// Verify delivery properties
-		assert.Equal(t, *msg, delivery.Message)
-		assert.Equal(t, uint64(12345), delivery.DeliveryTag)
-		assert.Equal(t, "test.exchange", delivery.Exchange)
-		assert.Equal(t, "test.key", delivery.RoutingKey)
-		assert.Equal(t, "test.queue", delivery.Queue)
-		assert.True(t, delivery.Redelivered)
-		assert.Equal(t, 2, delivery.DeliveryCount)
-		assert.Equal(t, "test-consumer", delivery.ConsumerTag)
-
-		// Get string representation
-		str := delivery.String()
-		assert.Contains(t, str, "test.exchange")
-		assert.Contains(t, str, "test.key")
-		assert.Contains(t, str, "test.queue")
-		assert.Contains(t, str, "12345")
-		assert.Contains(t, str, "true")
-	})
-
-	t.Run("TextMessageLifecycle", func(t *testing.T) {
-		// Create text message
-		text := "Hello, World! This is a test message."
-		msg := messaging.NewTextMessage(text, messaging.WithKey("test.key"))
-
-		// Verify text message properties
-		assert.Equal(t, []byte(text), msg.Body)
+		// Verify all properties
+		assert.Equal(t, "Hello, World!", string(msg.Body))
 		assert.Equal(t, "text/plain", msg.ContentType)
-		assert.Equal(t, "test.key", msg.Key)
-		assert.NotEmpty(t, msg.ID)
-		assert.NotZero(t, msg.Timestamp)
-
-		// Get text representation
-		resultText := msg.Text()
-		assert.Equal(t, text, resultText)
-
-		// Clone and verify
-		cloned := msg.Clone()
-		assert.Equal(t, msg.Body, cloned.Body)
-		assert.Equal(t, msg.ContentType, cloned.ContentType)
-		assert.Equal(t, msg.Key, cloned.Key)
-
-		// Check size
-		size := msg.Size()
-		// Size calculation may return -1 on overflow
-		if size == -1 {
-			// Overflow occurred, which is expected for large messages
-			assert.True(t, true, "Size overflow occurred as expected")
-		} else {
-			assert.GreaterOrEqual(t, size, len(text))
-		}
-	})
-
-	t.Run("MessageTransformation", func(t *testing.T) {
-		// Create JSON message
-		data := map[string]interface{}{
-			"name": "test",
-			"age":  25,
-		}
-
-		msg, err := messaging.NewJSONMessage(data, messaging.WithKey("test.key"))
-		assert.NoError(t, err)
-
-		// Transform to text
-		text := msg.Text()
-		assert.Contains(t, text, "test")
-		assert.Contains(t, text, "25")
-
-		// Transform to different JSON structure
-		var result struct {
-			Name string `json:"name"`
-			Age  int    `json:"age"`
-		}
-		err = msg.UnmarshalTo(&result)
-		assert.NoError(t, err)
-		assert.Equal(t, "test", result.Name)
-		assert.Equal(t, 25, result.Age)
-
-		// Clone and verify transformation still works
-		cloned := msg.Clone()
-		err = cloned.UnmarshalTo(&result)
-		assert.NoError(t, err)
-		assert.Equal(t, "test", result.Name)
-		assert.Equal(t, 25, result.Age)
-	})
-
-	t.Run("MessageRouting", func(t *testing.T) {
-		// Create message with routing information
-		msg := messaging.NewMessage(
-			[]byte("test body"),
-			messaging.WithKey("user.events.created"),
-			messaging.WithReplyTo("user.events.response"),
-			messaging.WithCorrelationID("corr-123"),
-			messaging.WithIdempotencyKey("idemp-123"),
-		)
-
-		// Create delivery for routing
-		delivery := messaging.Delivery{
-			Message:       *msg,
-			DeliveryTag:   12345,
-			Exchange:      "user.events",
-			RoutingKey:    "user.events.created",
-			Queue:         "user.events.queue",
-			Redelivered:   false,
-			DeliveryCount: 1,
-			ConsumerTag:   "user-consumer",
-		}
-
-		// Verify routing information
-		assert.Equal(t, "user.events.created", delivery.RoutingKey)
-		assert.Equal(t, "user.events", delivery.Exchange)
-		assert.Equal(t, "user.events.queue", delivery.Queue)
-		assert.Equal(t, "user.events.response", delivery.Message.ReplyTo)
-		assert.Equal(t, "corr-123", delivery.Message.CorrelationID)
-		assert.Equal(t, "idemp-123", delivery.Message.IdempotencyKey)
-
-		// Verify delivery string representation
-		str := delivery.String()
-		assert.Contains(t, str, "user.events")
-		assert.Contains(t, str, "user.events.created")
-		assert.Contains(t, str, "user.events.queue")
+		assert.Equal(t, "text/plain", msg.Headers["content-type"])
+		assert.Equal(t, "integration-test", msg.Metadata["source"])
+		assert.Equal(t, messaging.PriorityHigh, msg.Priority)
+		assert.Equal(t, 5*time.Minute, msg.Properties.TTL)
+		assert.Equal(t, 10*time.Minute, msg.Properties.Expiration)
+		assert.Equal(t, "hello.world", msg.Properties.RoutingKey)
+		assert.Equal(t, "messages", msg.Properties.Exchange)
+		assert.Equal(t, "hello-queue", msg.Properties.Queue)
+		assert.Equal(t, "corr-123", msg.Properties.CorrelationID)
+		assert.Equal(t, "reply-queue", msg.Properties.ReplyTo)
+		assert.True(t, msg.Properties.Persistent)
 	})
 }
-
-// Note: Helper functions are not needed as they duplicate internal functions
-// The validation is tested through the actual message creation and validation

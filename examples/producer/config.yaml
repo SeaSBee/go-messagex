@@ -1,0 +1,140 @@
+# RabbitMQ Producer Configuration
+# This file demonstrates all available configuration options for the RabbitMQ producer
+
+# Transport type - must be "rabbitmq"
+# Validation: oneof:rabbitmq
+# Default: "rabbitmq"
+transport: "rabbitmq"
+
+# Connection settings
+url: "amqp://guest:guest@localhost:5672/"  # Required - RabbitMQ connection URL
+# Validation: required
+# Default: "amqp://guest:guest@localhost:5672/"
+
+max_retries: 3  # Maximum number of connection retries
+# Validation: min:0,max:10
+# Default: 3
+
+retry_delay: "5s"  # Delay between retry attempts
+# Validation: min:1s,max:60s
+# Default: "5s"
+
+connection_timeout: "30s"  # Connection timeout duration
+# Validation: min:1s,max:300s
+# Default: "30s"
+
+# Connection pooling
+max_connections: 10  # Maximum number of connections
+# Validation: min:1,max:100
+# Default: 10
+
+max_channels: 100  # Maximum number of channels
+# Validation: min:1,max:1000
+# Default: 100
+
+# Producer-specific configuration
+producer:
+  # Batching settings
+  batch_size: 100  # Number of messages to batch together
+  # Validation: min:1,max:10000
+  # Default: 100
+
+  batch_timeout: "1s"  # Maximum time to wait before flushing batch
+  # Validation: min:1ms,max:60s
+  # Default: "1s"
+
+  publish_timeout: "10s"  # Timeout for publish operations
+  # Validation: min:1s,max:300s
+  # Default: "10s"
+
+  # RabbitMQ-specific settings
+  mandatory: false  # Make publishing mandatory
+  # Default: false
+
+  immediate: false  # Make publishing immediate
+  # Default: false
+
+  confirm_mode: true  # Enable publisher confirmations
+  # Default: true
+
+  # Default exchange and routing
+  default_exchange: ""  # Default exchange name
+  # Validation: max:255
+  # Default: ""
+
+  default_routing_key: ""  # Default routing key
+  # Validation: max:255
+  # Default: ""
+
+# Consumer configuration (required but not used in producer example)
+consumer:
+  # Acknowledgment settings
+  auto_commit: false  # Enable auto-commit
+  # Default: false
+
+  commit_interval: "1s"  # Commit interval for auto-commit
+  # Validation: min:1ms,max:60s
+  # Default: "1s"
+
+  # RabbitMQ-specific settings
+  auto_ack: false  # Enable auto-acknowledgment
+  # Default: false
+
+  exclusive: false  # Exclusive consumer
+  # Default: false
+
+  no_local: false  # No local delivery
+  # Default: false
+
+  no_wait: false  # No wait for operations
+  # Default: false
+
+  prefetch_count: 10  # Prefetch count for QoS
+  # Validation: min:0,max:1000
+  # Default: 10
+
+  prefetch_size: 0  # Prefetch size for QoS
+  # Validation: min:0,max:10485760
+  # Default: 0
+
+  consumer_tag: ""  # Consumer tag
+  # Validation: max:100
+  # Default: ""
+
+  # Queue settings
+  queue_durable: true  # Make queue durable
+  # Default: true
+
+  queue_auto_delete: false  # Auto-delete queue
+  # Default: false
+
+  queue_exclusive: false  # Exclusive queue
+  # Default: false
+
+  queue_no_wait: false  # No wait for queue operations
+  # Default: false
+
+  # Exchange settings
+  exchange_durable: true  # Make exchange durable
+  # Default: true
+
+  exchange_auto_delete: false  # Auto-delete exchange
+  # Default: false
+
+  exchange_internal: false  # Internal exchange
+  # Default: false
+
+  exchange_no_wait: false  # No wait for exchange operations
+  # Default: false
+
+  exchange_type: "direct"  # Exchange type
+  # Validation: oneof:direct fanout topic headers
+  # Default: "direct"
+
+# Monitoring settings
+metrics_enabled: true  # Enable metrics collection
+# Default: true
+
+health_check_interval: "30s"  # Health check interval
+# Validation: min:1s,max:300s
+# Default: "30s"

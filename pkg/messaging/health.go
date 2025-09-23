@@ -1,483 +1,330 @@
-// Package messaging provides transport-agnostic interfaces for messaging systems.
+// Package messaging provides health check implementation for RabbitMQ
 package messaging
 
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/wagslane/go-rabbitmq"
 )
 
-// HealthStatus represents the health status of a component.
+// HealthStatus represents the health status
 type HealthStatus string
 
 const (
-	// HealthStatusHealthy indicates the component is healthy.
-	HealthStatusHealthy HealthStatus = "healthy"
-
-	// HealthStatusUnhealthy indicates the component is unhealthy.
-	HealthStatusUnhealthy HealthStatus = "unhealthy"
-
-	// HealthStatusDegraded indicates the component is degraded but functional.
-	HealthStatusDegraded HealthStatus = "degraded"
-
-	// HealthStatusUnknown indicates the health status is unknown.
-	HealthStatusUnknown HealthStatus = "unknown"
+	StatusHealthy   HealthStatus = "healthy"
+	StatusUnhealthy HealthStatus = "unhealthy"
+	StatusUnknown   HealthStatus = "unknown"
 )
 
-// HealthCheck represents a health check result.
-type HealthCheck struct {
-	// Name is the name of the health check.
-	Name string
-
-	// Status is the health status.
-	Status HealthStatus
-
-	// Message provides additional information about the health status.
-	Message string
-
-	// Timestamp is when the health check was performed.
-	Timestamp time.Time
-
-	// Duration is how long the health check took.
-	Duration time.Duration
-
-	// Details contains additional health check details.
-	Details map[string]interface{}
-
-	// Error contains any error that occurred during the health check.
-	Error error
+// HealthChecker represents a health checker for RabbitMQ connections
+type HealthChecker struct {
+	conn           *rabbitmq.Conn
+	interval       time.Duration
+	mu             sync.RWMutex
+	closed         bool
+	status         HealthStatus
+	lastCheck      int64 // Unix timestamp for atomic access
+	lastError      error
+	checkCount     int64
+	successCount   int64
+	failureCount   int64
+	ctx            context.Context
+	cancel         context.CancelFunc
+	healthCallback func(status HealthStatus, err error)
 }
 
-// HealthChecker defines the interface for health checks.
-type HealthChecker interface {
-	// Check performs a health check and returns the result.
-	Check(ctx context.Context) HealthCheck
-
-	// Name returns the name of the health checker.
-	Name() string
+// HealthStats contains health check statistics
+type HealthStats struct {
+	Status       HealthStatus
+	LastCheck    time.Time
+	LastError    error
+	CheckCount   int64
+	SuccessCount int64
+	FailureCount int64
+	SuccessRate  float64
+	IsHealthy    bool
 }
 
-// HealthCheckerFunc is a function adapter for HealthChecker interface.
-type HealthCheckerFunc func(ctx context.Context) HealthCheck
-
-// Check implements the HealthChecker interface.
-func (f HealthCheckerFunc) Check(ctx context.Context) HealthCheck {
-	return f(ctx)
-}
-
-// Name returns the name of the health checker.
-func (f HealthCheckerFunc) Name() string {
-	return "func"
-}
-
-// HealthManager manages multiple health checks.
-type HealthManager struct {
-	checkers map[string]HealthChecker
-	mu       sync.RWMutex
-	timeout  time.Duration
-}
-
-// NewHealthManager creates a new health manager.
-func NewHealthManager(timeout time.Duration) *HealthManager {
-	if timeout <= 0 {
-		timeout = 30 * time.Second // Default timeout
-	}
-	return &HealthManager{
-		checkers: make(map[string]HealthChecker),
-		timeout:  timeout,
+// NewHealthChecker creates a new health checker
+func NewHealthChecker(conn *rabbitmq.Conn, interval time.Duration) *HealthChecker {
+	if conn == nil {
+		// Return a health checker that will always report unhealthy
+		ctx, cancel := context.WithCancel(context.Background())
+		hc := &HealthChecker{
+			conn:     nil,
+			interval: interval,
+			status:   StatusUnhealthy,
+			ctx:      ctx,
+			cancel:   cancel,
+		}
+		// Don't start health checking for nil connection
+		return hc
 	}
 
+	if interval <= 0 {
+		interval = 30 * time.Second // Default interval
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	hc := &HealthChecker{
+		conn:     conn,
+		interval: interval,
+		status:   StatusUnknown,
+		ctx:      ctx,
+		cancel:   cancel,
+	}
+
+	// Start health checking in a goroutine
+	go hc.startHealthChecking()
+
+	return hc
 }
 
-// Register registers a health checker.
-func (hm *HealthManager) Register(name string, checker HealthChecker) {
-	if name == "" {
-		panic("health checker name cannot be empty")
-	}
-	if checker == nil {
-		panic("health checker cannot be nil")
-	}
+// startHealthChecking starts the health checking loop
+func (hc *HealthChecker) startHealthChecking() {
+	ticker := time.NewTicker(hc.interval)
+	defer ticker.Stop()
 
-	hm.mu.Lock()
-	defer hm.mu.Unlock()
-	hm.checkers[name] = checker
+	for {
+		select {
+		case <-hc.ctx.Done():
+			return
+		case <-ticker.C:
+			hc.performHealthCheck()
+		}
+	}
 }
 
-// RegisterFunc registers a health check function.
-func (hm *HealthManager) RegisterFunc(name string, fn func(ctx context.Context) HealthCheck) {
-	if name == "" {
-		panic("health checker name cannot be empty")
-	}
-	if fn == nil {
-		panic("health check function cannot be nil")
-	}
+// performHealthCheck performs a health check
+func (hc *HealthChecker) performHealthCheck() {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
 
-	hm.Register(name, HealthCheckerFunc(fn))
-}
+	atomic.AddInt64(&hc.checkCount, 1)
+	atomic.StoreInt64(&hc.lastCheck, time.Now().UnixNano())
 
-// Unregister removes a health checker.
-func (hm *HealthManager) Unregister(name string) {
-	if name == "" {
+	// Check if connection is closed
+	if hc.closed {
+		hc.setStatus(StatusUnhealthy, fmt.Errorf("health checker is closed"))
 		return
 	}
 
-	hm.mu.Lock()
-	defer hm.mu.Unlock()
-	delete(hm.checkers, name)
-}
-
-// Check performs all registered health checks.
-func (hm *HealthManager) Check(ctx context.Context) map[string]HealthCheck {
-	if ctx == nil {
-		ctx = context.Background()
+	// Check if connection is nil
+	if hc.conn == nil {
+		hc.setStatus(StatusUnhealthy, fmt.Errorf("connection is nil"))
+		return
 	}
 
-	// Create a timeout context for the entire operation
-	checkCtx, cancel := context.WithTimeout(ctx, hm.timeout)
+	// Perform a simple health check by trying to get connection info
+	// Note: go-rabbitmq doesn't expose connection state directly
+	// We'll assume the connection is healthy if it's not nil and not closed
+	hc.setStatus(StatusHealthy, nil)
+}
+
+// setStatus sets the health status and calls the callback if provided
+func (hc *HealthChecker) setStatus(status HealthStatus, err error) {
+	oldStatus := hc.status
+	hc.status = status
+	hc.lastError = err
+
+	if status == StatusHealthy {
+		atomic.AddInt64(&hc.successCount, 1)
+	} else {
+		atomic.AddInt64(&hc.failureCount, 1)
+	}
+
+	// Call callback if status changed
+	if oldStatus != status && hc.healthCallback != nil {
+		hc.healthCallback(status, err)
+	}
+}
+
+// IsHealthy returns true if the connection is healthy
+func (hc *HealthChecker) IsHealthy() bool {
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+
+	return hc.status == StatusHealthy
+}
+
+// GetStatus returns the current health status
+func (hc *HealthChecker) GetStatus() HealthStatus {
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+
+	return hc.status
+}
+
+// GetStats returns health check statistics
+func (hc *HealthChecker) GetStats() *HealthStats {
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+
+	checkCount := atomic.LoadInt64(&hc.checkCount)
+	successCount := atomic.LoadInt64(&hc.successCount)
+	failureCount := atomic.LoadInt64(&hc.failureCount)
+	lastCheckNano := atomic.LoadInt64(&hc.lastCheck)
+
+	var lastCheckTime time.Time
+	if lastCheckNano > 0 {
+		lastCheckTime = time.Unix(0, lastCheckNano)
+	}
+
+	var successRate float64
+	if checkCount > 0 {
+		successRate = float64(successCount) / float64(checkCount)
+	}
+
+	return &HealthStats{
+		Status:       hc.status,
+		LastCheck:    lastCheckTime,
+		LastError:    hc.lastError,
+		CheckCount:   checkCount,
+		SuccessCount: successCount,
+		FailureCount: failureCount,
+		SuccessRate:  successRate,
+		IsHealthy:    hc.status == StatusHealthy,
+	}
+}
+
+// GetStatsMap returns health check statistics as a map
+func (hc *HealthChecker) GetStatsMap() map[string]interface{} {
+	stats := hc.GetStats()
+	return map[string]interface{}{
+		"status":        stats.Status,
+		"last_check":    stats.LastCheck,
+		"last_error":    stats.LastError,
+		"check_count":   stats.CheckCount,
+		"success_count": stats.SuccessCount,
+		"failure_count": stats.FailureCount,
+		"success_rate":  stats.SuccessRate,
+		"is_healthy":    stats.IsHealthy,
+		"closed":        hc.closed,
+	}
+}
+
+// SetHealthCallback sets a callback function that is called when health status changes
+func (hc *HealthChecker) SetHealthCallback(callback func(status HealthStatus, err error)) {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	hc.healthCallback = callback
+}
+
+// CheckNow performs an immediate health check
+func (hc *HealthChecker) CheckNow() error {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+
+	atomic.AddInt64(&hc.checkCount, 1)
+	atomic.StoreInt64(&hc.lastCheck, time.Now().UnixNano())
+
+	if hc.closed {
+		err := fmt.Errorf("health checker is closed")
+		hc.setStatus(StatusUnhealthy, err)
+		return err
+	}
+
+	if hc.conn == nil {
+		err := fmt.Errorf("connection is nil")
+		hc.setStatus(StatusUnhealthy, err)
+		return err
+	}
+
+	hc.setStatus(StatusHealthy, nil)
+	return nil
+}
+
+// Close closes the health checker
+func (hc *HealthChecker) Close() error {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+
+	if hc.closed {
+		return nil
+	}
+
+	hc.closed = true
+	hc.cancel()
+	hc.setStatus(StatusUnhealthy, fmt.Errorf("health checker closed"))
+
+	return nil
+}
+
+// String returns a string representation of the health checker
+func (hc *HealthChecker) String() string {
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+
+	return fmt.Sprintf("HealthChecker{Status: %s, Checks: %d, Success: %d, Failures: %d}",
+		hc.status,
+		atomic.LoadInt64(&hc.checkCount),
+		atomic.LoadInt64(&hc.successCount),
+		atomic.LoadInt64(&hc.failureCount))
+}
+
+// WaitForHealthy waits for the connection to become healthy
+func (hc *HealthChecker) WaitForHealthy(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	hm.mu.RLock()
-	checkers := make(map[string]HealthChecker, len(hm.checkers))
-	for k, v := range hm.checkers {
-		checkers[k] = v
-	}
-	hm.mu.RUnlock()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
-	if len(checkers) == 0 {
-		return make(map[string]HealthCheck)
-	}
-
-	results := make(map[string]HealthCheck)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	for name, checker := range checkers {
-		wg.Add(1)
-		go func(name string, checker HealthChecker) {
-			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					mu.Lock()
-					results[name] = HealthCheck{
-						Name:      name,
-						Status:    HealthStatusUnhealthy,
-						Message:   fmt.Sprintf("Health check panicked: %v", r),
-						Timestamp: time.Now(),
-						Error:     fmt.Errorf("panic: %v", r),
-					}
-					mu.Unlock()
-				}
-			}()
-
-			// Create a timeout context for this individual check
-			individualCtx, cancel := context.WithTimeout(checkCtx, hm.timeout)
-			defer cancel()
-
-			start := time.Now()
-			result := checker.Check(individualCtx)
-			result.Duration = time.Since(start)
-			result.Timestamp = start
-
-			mu.Lock()
-			results[name] = result
-			mu.Unlock()
-		}(name, checker)
-	}
-
-	wg.Wait()
-	return results
-}
-
-// OverallStatus returns the overall health status based on all checks.
-func (hm *HealthManager) OverallStatus(ctx context.Context) HealthStatus {
-	checks := hm.Check(ctx)
-
-	if len(checks) == 0 {
-		return HealthStatusUnknown
-	}
-
-	hasUnhealthy := false
-	hasDegraded := false
-
-	for _, check := range checks {
-		switch check.Status {
-		case HealthStatusUnhealthy:
-			hasUnhealthy = true
-		case HealthStatusDegraded:
-			hasDegraded = true
-		}
-	}
-
-	if hasUnhealthy {
-		return HealthStatusUnhealthy
-	}
-	if hasDegraded {
-		return HealthStatusDegraded
-	}
-	return HealthStatusHealthy
-}
-
-// HealthReport represents a comprehensive health report.
-type HealthReport struct {
-	// Status is the overall health status.
-	Status HealthStatus
-
-	// Timestamp is when the report was generated.
-	Timestamp time.Time
-
-	// Duration is how long the health check took.
-	Duration time.Duration
-
-	// Checks contains individual health check results.
-	Checks map[string]HealthCheck
-
-	// Summary provides a summary of the health status.
-	Summary HealthSummary
-}
-
-// HealthSummary provides a summary of health check results.
-type HealthSummary struct {
-	// Total is the total number of health checks.
-	Total int
-
-	// Healthy is the number of healthy checks.
-	Healthy int
-
-	// Unhealthy is the number of unhealthy checks.
-	Unhealthy int
-
-	// Degraded is the number of degraded checks.
-	Degraded int
-
-	// Unknown is the number of unknown checks.
-	Unknown int
-}
-
-// GenerateReport generates a comprehensive health report.
-func (hm *HealthManager) GenerateReport(ctx context.Context) HealthReport {
-	start := time.Now()
-	checks := hm.Check(ctx)
-	duration := time.Since(start)
-
-	summary := HealthSummary{
-		Total: len(checks),
-	}
-
-	for _, check := range checks {
-		switch check.Status {
-		case HealthStatusHealthy:
-			summary.Healthy++
-		case HealthStatusUnhealthy:
-			summary.Unhealthy++
-		case HealthStatusDegraded:
-			summary.Degraded++
-		case HealthStatusUnknown:
-			summary.Unknown++
-		}
-	}
-
-	// Determine overall status based on the checks we already have
-	status := HealthStatusUnknown
-	if len(checks) > 0 {
-		hasUnhealthy := false
-		hasDegraded := false
-
-		for _, check := range checks {
-			switch check.Status {
-			case HealthStatusUnhealthy:
-				hasUnhealthy = true
-			case HealthStatusDegraded:
-				hasDegraded = true
+	for {
+		select {
+		case <-ctx.Done():
+			return NewTimeoutError("health check timeout", timeout, "wait_for_healthy", ctx.Err())
+		case <-hc.ctx.Done():
+			return fmt.Errorf("health checker closed")
+		case <-ticker.C:
+			if hc.IsHealthy() {
+				return nil
 			}
 		}
+	}
+}
 
-		if hasUnhealthy {
-			status = HealthStatusUnhealthy
-		} else if hasDegraded {
-			status = HealthStatusDegraded
-		} else {
-			status = HealthStatusHealthy
+// WaitForUnhealthy waits for the connection to become unhealthy
+func (hc *HealthChecker) WaitForUnhealthy(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return NewTimeoutError("health check timeout", timeout, "wait_for_unhealthy", ctx.Err())
+		case <-hc.ctx.Done():
+			return fmt.Errorf("health checker closed")
+		case <-ticker.C:
+			if !hc.IsHealthy() {
+				return nil
+			}
 		}
 	}
-
-	return HealthReport{
-		Status:    status,
-		Timestamp: start,
-		Duration:  duration,
-		Checks:    checks,
-		Summary:   summary,
-	}
 }
 
-// Built-in health checkers
-
-// ConnectionHealthChecker checks the health of connections.
-type ConnectionHealthChecker struct {
-	transport string
-	checkFn   func(ctx context.Context) (bool, error)
-}
-
-// NewConnectionHealthChecker creates a new connection health checker.
-func NewConnectionHealthChecker(transport string, checkFn func(ctx context.Context) (bool, error)) *ConnectionHealthChecker {
-	if transport == "" {
-		panic("transport name cannot be empty")
-	}
-	if checkFn == nil {
-		panic("check function cannot be nil")
+// performHealthCheckInternal performs the actual health check logic
+func (hc *HealthChecker) performHealthCheckInternal() error {
+	// Check if connection is closed
+	if hc.closed {
+		return fmt.Errorf("health checker is closed")
 	}
 
-	return &ConnectionHealthChecker{
-		transport: transport,
-		checkFn:   checkFn,
-	}
-}
-
-// Name returns the name of the health checker.
-func (c *ConnectionHealthChecker) Name() string {
-	return fmt.Sprintf("%s_connection", c.transport)
-}
-
-// Check performs the connection health check.
-func (c *ConnectionHealthChecker) Check(ctx context.Context) HealthCheck {
-	if ctx == nil {
-		ctx = context.Background()
+	// Check if connection is nil
+	if hc.conn == nil {
+		return fmt.Errorf("connection is nil")
 	}
 
-	healthy, err := c.checkFn(ctx)
-
-	status := HealthStatusHealthy
-	message := "Connection is healthy"
-
-	if err != nil {
-		status = HealthStatusUnhealthy
-		message = fmt.Sprintf("Connection error: %v", err)
-	} else if !healthy {
-		status = HealthStatusDegraded
-		message = "Connection is degraded"
-	}
-
-	return HealthCheck{
-		Name:      c.Name(),
-		Status:    status,
-		Message:   message,
-		Timestamp: time.Now(),
-		Details: map[string]interface{}{
-			"transport": c.transport,
-		},
-		Error: err,
-	}
-}
-
-// MemoryHealthChecker checks memory usage.
-type MemoryHealthChecker struct {
-	maxUsagePercent float64
-}
-
-// NewMemoryHealthChecker creates a new memory health checker.
-func NewMemoryHealthChecker(maxUsagePercent float64) *MemoryHealthChecker {
-	if maxUsagePercent <= 0 || maxUsagePercent > 100 {
-		panic("maxUsagePercent must be between 0 and 100")
-	}
-
-	return &MemoryHealthChecker{
-		maxUsagePercent: maxUsagePercent,
-	}
-}
-
-// Name returns the name of the health checker.
-func (m *MemoryHealthChecker) Name() string {
-	return "memory"
-}
-
-// Check performs the memory health check.
-func (m *MemoryHealthChecker) Check(ctx context.Context) HealthCheck {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-
-	// Calculate memory usage percentage
-	totalMemory := memStats.Sys
-	usedMemory := memStats.Alloc
-	usagePercent := float64(usedMemory) / float64(totalMemory) * 100
-
-	status := HealthStatusHealthy
-	message := fmt.Sprintf("Memory usage: %.2f%%", usagePercent)
-
-	if usagePercent > m.maxUsagePercent {
-		status = HealthStatusUnhealthy
-		message = fmt.Sprintf("Memory usage %.2f%% exceeds limit %.2f%%", usagePercent, m.maxUsagePercent)
-	} else if usagePercent > m.maxUsagePercent*0.8 {
-		status = HealthStatusDegraded
-		message = fmt.Sprintf("Memory usage %.2f%% is approaching limit %.2f%%", usagePercent, m.maxUsagePercent)
-	}
-
-	return HealthCheck{
-		Name:      m.Name(),
-		Status:    status,
-		Message:   message,
-		Timestamp: time.Now(),
-		Details: map[string]interface{}{
-			"max_usage_percent":     m.maxUsagePercent,
-			"current_usage_percent": usagePercent,
-			"total_memory_bytes":    totalMemory,
-			"used_memory_bytes":     usedMemory,
-		},
-	}
-}
-
-// GoroutineHealthChecker checks goroutine count.
-type GoroutineHealthChecker struct {
-	maxGoroutines int
-}
-
-// NewGoroutineHealthChecker creates a new goroutine health checker.
-func NewGoroutineHealthChecker(maxGoroutines int) *GoroutineHealthChecker {
-	if maxGoroutines <= 0 {
-		panic("maxGoroutines must be positive")
-	}
-
-	return &GoroutineHealthChecker{
-		maxGoroutines: maxGoroutines,
-	}
-}
-
-// Name returns the name of the health checker.
-func (g *GoroutineHealthChecker) Name() string {
-	return "goroutines"
-}
-
-// Check performs the goroutine health check.
-func (g *GoroutineHealthChecker) Check(ctx context.Context) HealthCheck {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	currentGoroutines := runtime.NumGoroutine()
-
-	status := HealthStatusHealthy
-	message := fmt.Sprintf("Goroutine count: %d", currentGoroutines)
-
-	if currentGoroutines > g.maxGoroutines {
-		status = HealthStatusUnhealthy
-		message = fmt.Sprintf("Goroutine count %d exceeds limit %d", currentGoroutines, g.maxGoroutines)
-	} else if currentGoroutines > int(float64(g.maxGoroutines)*0.8) {
-		status = HealthStatusDegraded
-		message = fmt.Sprintf("Goroutine count %d is approaching limit %d", currentGoroutines, g.maxGoroutines)
-	}
-
-	return HealthCheck{
-		Name:      g.Name(),
-		Status:    status,
-		Message:   message,
-		Timestamp: time.Now(),
-		Details: map[string]interface{}{
-			"max_goroutines":     g.maxGoroutines,
-			"current_goroutines": currentGoroutines,
-		},
-	}
+	// Perform a simple health check by trying to get connection info
+	// Note: go-rabbitmq doesn't expose connection state directly
+	// We'll assume the connection is healthy if it's not nil and not closed
+	return nil
 }

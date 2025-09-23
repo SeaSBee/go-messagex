@@ -1,4 +1,6 @@
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
+github.com/creasty/defaults v1.8.0 h1:z27FJxCAa0JKt3utc0sCImAEb+spPucmKoOdLHvHYKk=
+github.com/creasty/defaults v1.8.0/go.mod h1:iGzKe6pbEHnpMPtfDXZEr0NVxWnPTjb1bbDy08fPzYM=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
@@ -20,10 +22,14 @@ github.com/rogpeppe/go-internal v1.13.1 h1:KvO1DLK/DRN07sQ1LQKScxyZJuNnedQ5/wKSR
 github.com/rogpeppe/go-internal v1.13.1/go.mod h1:uMEvuHeurkdAXX61udpOXGD/AzZDWNMNyH2VO9fmH0o=
 github.com/seasbee/go-logx v1.2.0 h1:jae7qFceQSRhc7t9Xbuv1QH0rb/5aj32PuxTnX9xHWA=
 github.com/seasbee/go-logx v1.2.0/go.mod h1:JXxKukQF9u3Z6k42cf/w2o7Z54GX5mbboPfi7/DgMRE=
-github.com/seasbee/go-validatorx v1.1.0 h1:4GYX+Dk1lraCGegOpa8+XFJI1Q5bN/I8aY3DbzOqDxU=
-github.com/seasbee/go-validatorx v1.1.0/go.mod h1:eAd2aiVSNakXpYi9110Uw7HcNRUWaLOSYRAZBOoo/4k=
+github.com/seasbee/go-validatorx v1.1.1 h1:MjnhlghiAkL6zw3JC4chXixgKSLXhy8J9yk/MHcQ7qk=
+github.com/seasbee/go-validatorx v1.1.1/go.mod h1:eAd2aiVSNakXpYi9110Uw7HcNRUWaLOSYRAZBOoo/4k=
+github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
+github.com/stretchr/objx v0.5.2/go.mod h1:FRsXN1f5AsAjCGJKqEizvkpNtU+EGNCLh3NxZ/8L+MA=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+github.com/wagslane/go-rabbitmq v0.15.0 h1:KibShYLLeDYc3C5fnx+BjiHJLJdL6D5/BysgcRJknRE=
+github.com/wagslane/go-rabbitmq v0.15.0/go.mod h1:ts7Di9tkLMyI0Z6/aA6T78zQkKDNrtApVis1qqMjqu4=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
 go.uber.org/multierr v1.10.0 h1:S0h4aNzvfcFsC3dRF1jLoaov7oRaKqRGC/pUEJ2yvPQ=

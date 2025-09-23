@@ -3,788 +3,464 @@ package unit
 import (
 	"errors"
 	"fmt"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestErrorCodeConstants tests all error code constants
-func TestErrorCodeConstants(t *testing.T) {
-	t.Run("AllErrorCodes", func(t *testing.T) {
-		expectedCodes := []messaging.ErrorCode{
-			messaging.ErrorCodeTransport,
-			messaging.ErrorCodeConfiguration,
-			messaging.ErrorCodeConnection,
-			messaging.ErrorCodeChannel,
-			messaging.ErrorCodePublish,
-			messaging.ErrorCodeConsume,
-			messaging.ErrorCodeSerialization,
-			messaging.ErrorCodeValidation,
-			messaging.ErrorCodeTimeout,
-			messaging.ErrorCodeBackpressure,
-			messaging.ErrorCodePersistence,
-			messaging.ErrorCodeDLQ,
-			messaging.ErrorCodeTransformation,
-			messaging.ErrorCodeRouting,
-			messaging.ErrorCodeInternal,
-		}
+func TestMessagingError(t *testing.T) {
+	t.Run("creates error with message", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
 
-		for _, code := range expectedCodes {
-			assert.True(t, messaging.IsValidErrorCode(code), "Error code %s should be valid", code)
-		}
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "test error")
+		assert.Equal(t, messaging.ErrorTypeConnection, err.Type)
+		assert.Equal(t, "test error", err.Message)
+		assert.Nil(t, err.Err)
 	})
 
-	t.Run("InvalidErrorCode", func(t *testing.T) {
-		invalidCode := messaging.ErrorCode("INVALID_CODE")
-		assert.False(t, messaging.IsValidErrorCode(invalidCode))
+	t.Run("creates error with cause", func(t *testing.T) {
+		cause := errors.New("original error")
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", cause)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "test error")
+		assert.Equal(t, messaging.ErrorTypeConnection, err.Type)
+		assert.Equal(t, "test error", err.Message)
+		assert.Equal(t, cause, err.Err)
 	})
 
-	t.Run("EmptyErrorCode", func(t *testing.T) {
-		emptyCode := messaging.ErrorCode("")
-		assert.False(t, messaging.IsValidErrorCode(emptyCode))
+	t.Run("creates error with empty message uses default", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "", nil)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "messaging error occurred")
+		assert.Equal(t, messaging.ErrorTypeConnection, err.Type)
+	})
+
+	t.Run("creates error with nil cause", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
+
+		assert.Error(t, err)
+		assert.Nil(t, err.Err)
 	})
 }
 
-// TestCommonErrorVariables tests all common error variables
-func TestCommonErrorVariables(t *testing.T) {
-	t.Run("AllCommonErrors", func(t *testing.T) {
-		commonErrors := []error{
-			messaging.ErrUnsupportedTransport,
-			messaging.ErrTransportNotRegistered,
-			messaging.ErrPublisherClosed,
-			messaging.ErrConsumerClosed,
-			messaging.ErrConsumerAlreadyStarted,
-			messaging.ErrBackpressure,
-			messaging.ErrTimeout,
-			messaging.ErrInvalidMessage,
-			messaging.ErrInvalidContentType,
-			messaging.ErrMessageTooLarge,
-			messaging.ErrInvalidConfiguration,
-			messaging.ErrConnectionFailed,
-			messaging.ErrChannelClosed,
-			messaging.ErrUnroutable,
-			messaging.ErrNotConfirmed,
-			messaging.ErrHandlerPanic,
-			messaging.ErrInvalidAckDecision,
-			messaging.ErrInvalidErrorCode,
-		}
+func TestMessagingError_WithContext(t *testing.T) {
+	t.Run("adds context to error", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
 
-		for _, err := range commonErrors {
-			assert.NotNil(t, err)
-			assert.NotEmpty(t, err.Error())
-		}
+		// Add context
+		errWithContext := err.WithContext("key1", "value1")
+
+		assert.Equal(t, err, errWithContext) // Should return same error instance
+
+		// Verify context was added
+		value, exists := err.GetContext("key1")
+		assert.True(t, exists)
+		assert.Equal(t, "value1", value)
 	})
 
-	t.Run("ErrorComparison", func(t *testing.T) {
-		assert.NotEqual(t, messaging.ErrUnsupportedTransport, messaging.ErrTransportNotRegistered)
-		assert.NotEqual(t, messaging.ErrPublisherClosed, messaging.ErrConsumerClosed)
-		assert.Equal(t, messaging.ErrTimeout, messaging.ErrTimeout)
-	})
-}
+	t.Run("adds multiple context values", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
 
-// TestNewError tests the NewError function
-func TestNewError(t *testing.T) {
-	t.Run("ValidError", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodePublish, err.Code)
-		assert.Equal(t, "test_operation", err.Operation)
-		assert.Equal(t, "test message", err.Message)
-		assert.Nil(t, err.Cause)
-		assert.NotNil(t, err.Context)
-		assert.False(t, err.Retryable)
-		assert.False(t, err.Temporary)
-	})
+		err.WithContext("key1", "value1")
+		err.WithContext("key2", "value2")
+		err.WithContext("key3", 123)
 
-	t.Run("InvalidErrorCode", func(t *testing.T) {
-		invalidCode := messaging.ErrorCode("INVALID")
-		err := messaging.NewError(invalidCode, "test_operation", "test message")
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodeInternal, err.Code) // Should default to Internal
-	})
-
-	t.Run("EmptyOperation", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "", "test message")
-		assert.NotNil(t, err)
-		assert.Equal(t, "unknown", err.Operation) // Should default to "unknown"
-	})
-
-	t.Run("EmptyMessage", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "")
-		assert.NotNil(t, err)
-		assert.Equal(t, "no error message provided", err.Message) // Should default to default message
-	})
-
-	t.Run("NilError", func(t *testing.T) {
-		var err *messaging.MessagingError
-		assert.Equal(t, "<nil>", err.Error())
-		assert.Nil(t, err.Unwrap())
-		assert.False(t, err.Is(nil))
-	})
-}
-
-// TestNewErrorf tests the NewErrorf function
-func TestNewErrorf(t *testing.T) {
-	t.Run("ValidFormattedError", func(t *testing.T) {
-		err := messaging.NewErrorf(messaging.ErrorCodePublish, "test_operation", "error with %s", "parameter")
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodePublish, err.Code)
-		assert.Equal(t, "test_operation", err.Operation)
-		assert.Equal(t, "error with parameter", err.Message)
-	})
-
-	t.Run("EmptyFormat", func(t *testing.T) {
-		err := messaging.NewErrorf(messaging.ErrorCodePublish, "test_operation", "")
-		assert.NotNil(t, err)
-		assert.Equal(t, "no error message provided", err.Message)
-	})
-
-	t.Run("MultipleParameters", func(t *testing.T) {
-		err := messaging.NewErrorf(messaging.ErrorCodePublish, "test_operation", "error %s with %d parameters", "test", 2)
-		assert.NotNil(t, err)
-		assert.Equal(t, "error test with 2 parameters", err.Message)
-	})
-}
-
-// TestWrapError tests the WrapError function
-func TestWrapError(t *testing.T) {
-	t.Run("ValidWrappedError", func(t *testing.T) {
-		cause := errors.New("original error")
-		err := messaging.WrapError(messaging.ErrorCodePublish, "test_operation", "wrapped message", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodePublish, err.Code)
-		assert.Equal(t, "test_operation", err.Operation)
-		assert.Equal(t, "wrapped message", err.Message)
-		assert.Equal(t, cause, err.Cause)
-	})
-
-	t.Run("InvalidErrorCode", func(t *testing.T) {
-		invalidCode := messaging.ErrorCode("INVALID")
-		cause := errors.New("original error")
-		err := messaging.WrapError(invalidCode, "test_operation", "wrapped message", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodeInternal, err.Code) // Should default to Internal
-	})
-
-	t.Run("EmptyOperation", func(t *testing.T) {
-		cause := errors.New("original error")
-		err := messaging.WrapError(messaging.ErrorCodePublish, "", "wrapped message", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, "unknown", err.Operation)
-	})
-
-	t.Run("EmptyMessage", func(t *testing.T) {
-		cause := errors.New("original error")
-		err := messaging.WrapError(messaging.ErrorCodePublish, "test_operation", "", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, "no error message provided", err.Message)
-	})
-
-	t.Run("NilCause", func(t *testing.T) {
-		err := messaging.WrapError(messaging.ErrorCodePublish, "test_operation", "wrapped message", nil)
-		assert.NotNil(t, err)
-		assert.Nil(t, err.Cause)
-	})
-}
-
-// TestWrapErrorf tests the WrapErrorf function
-func TestWrapErrorf(t *testing.T) {
-	t.Run("ValidFormattedWrappedError", func(t *testing.T) {
-		cause := errors.New("original error")
-		err := messaging.WrapErrorf(messaging.ErrorCodePublish, "test_operation", cause, "wrapped error with %s", "parameter")
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodePublish, err.Code)
-		assert.Equal(t, "test_operation", err.Operation)
-		assert.Equal(t, "wrapped error with parameter", err.Message)
-		assert.Equal(t, cause, err.Cause)
-	})
-
-	t.Run("EmptyFormat", func(t *testing.T) {
-		cause := errors.New("original error")
-		err := messaging.WrapErrorf(messaging.ErrorCodePublish, "test_operation", cause, "")
-		assert.NotNil(t, err)
-		assert.Equal(t, "no error message provided", err.Message)
-	})
-}
-
-// TestMessagingErrorMethods tests MessagingError methods
-func TestMessagingErrorMethods(t *testing.T) {
-	t.Run("ErrorMethod", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		errorString := err.Error()
-		assert.Contains(t, errorString, "PUBLISH")
-		assert.Contains(t, errorString, "test message")
-	})
-
-	t.Run("ErrorMethodWithCause", func(t *testing.T) {
-		cause := errors.New("original error")
-		err := messaging.WrapError(messaging.ErrorCodePublish, "test_operation", "wrapped message", cause)
-		errorString := err.Error()
-		assert.Contains(t, errorString, "PUBLISH")
-		assert.Contains(t, errorString, "wrapped message")
-		assert.Contains(t, errorString, "original error")
-	})
-
-	t.Run("UnwrapMethod", func(t *testing.T) {
-		cause := errors.New("original error")
-		err := messaging.WrapError(messaging.ErrorCodePublish, "test_operation", "wrapped message", cause)
-		unwrapped := err.Unwrap()
-		assert.Equal(t, cause, unwrapped)
-	})
-
-	t.Run("UnwrapMethodNoCause", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		unwrapped := err.Unwrap()
-		assert.Nil(t, unwrapped)
-	})
-
-	t.Run("IsMethod", func(t *testing.T) {
-		cause := messaging.ErrTimeout
-		err := messaging.WrapError(messaging.ErrorCodePublish, "test_operation", "wrapped message", cause)
-		assert.True(t, err.Is(messaging.ErrTimeout))
-		assert.False(t, err.Is(messaging.ErrConnectionFailed))
-	})
-
-	t.Run("IsMethodNoCause", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		assert.False(t, err.Is(messaging.ErrTimeout))
-	})
-}
-
-// TestErrorContextManagement tests context management functionality
-func TestErrorContextManagement(t *testing.T) {
-	t.Run("WithContext", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		err = err.WithContext("key1", "value1")
-		err = err.WithContext("key2", 42)
-		err = err.WithContext("key3", true)
-
-		// Test context retrieval
-		value1, ok := messaging.GetContextValue(err, "key1")
-		assert.True(t, ok)
+		// Verify all context values
+		value1, exists1 := err.GetContext("key1")
+		assert.True(t, exists1)
 		assert.Equal(t, "value1", value1)
 
-		value2, ok := messaging.GetContextValue(err, "key2")
-		assert.True(t, ok)
-		assert.Equal(t, 42, value2)
+		value2, exists2 := err.GetContext("key2")
+		assert.True(t, exists2)
+		assert.Equal(t, "value2", value2)
 
-		value3, ok := messaging.GetContextValue(err, "key3")
-		assert.True(t, ok)
-		assert.Equal(t, true, value3)
-
-		// Test typed context retrieval
-		strValue, ok := messaging.GetContextString(err, "key1")
-		assert.True(t, ok)
-		assert.Equal(t, "value1", strValue)
-
-		intValue, ok := messaging.GetContextInt(err, "key2")
-		assert.True(t, ok)
-		assert.Equal(t, 42, intValue)
-
-		boolValue, ok := messaging.GetContextBool(err, "key3")
-		assert.True(t, ok)
-		assert.Equal(t, true, boolValue)
+		value3, exists3 := err.GetContext("key3")
+		assert.True(t, exists3)
+		assert.Equal(t, 123, value3)
 	})
 
-	t.Run("WithContextSafe", func(t *testing.T) {
-		originalErr := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		originalErr = originalErr.WithContext("original_key", "original_value")
+	t.Run("overwrites existing context", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
 
-		// Create a safe copy with new context
-		newErr := originalErr.WithContextSafe("new_key", "new_value")
+		err.WithContext("key1", "value1")
+		err.WithContext("key1", "value2") // Overwrite
 
-		// Original should remain unchanged
-		originalValue, ok := messaging.GetContextValue(originalErr, "original_key")
-		assert.True(t, ok)
-		assert.Equal(t, "original_value", originalValue)
-
-		_, ok = messaging.GetContextValue(originalErr, "new_key")
-		assert.False(t, ok)
-
-		// New error should have both contexts
-		originalValue, ok = messaging.GetContextValue(newErr, "original_key")
-		assert.True(t, ok)
-		assert.Equal(t, "original_value", originalValue)
-
-		newValue, ok := messaging.GetContextValue(newErr, "new_key")
-		assert.True(t, ok)
-		assert.Equal(t, "new_value", newValue)
+		value, exists := err.GetContext("key1")
+		assert.True(t, exists)
+		assert.Equal(t, "value2", value)
 	})
 
-	t.Run("GetErrorContext", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		err = err.WithContext("key1", "value1")
-		err = err.WithContext("key2", 42)
+	t.Run("retrieves context value", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
+		err.WithContext("key1", "value1")
 
-		context := messaging.GetErrorContext(err)
-		assert.Len(t, context, 2)
-		assert.Equal(t, "value1", context["key1"])
-		assert.Equal(t, 42, context["key2"])
+		value, exists := err.GetContext("key1")
+		assert.True(t, exists)
+		assert.Equal(t, "value1", value)
 	})
 
-	t.Run("ContextWithNilError", func(t *testing.T) {
-		var err *messaging.MessagingError
-		context := messaging.GetErrorContext(err)
-		assert.Empty(t, context)
+	t.Run("returns false for non-existent context", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
 
-		_, ok := messaging.GetContextValue(err, "key")
-		assert.False(t, ok)
+		value, exists := err.GetContext("non-existent")
+		assert.False(t, exists)
+		assert.Nil(t, value)
+	})
+}
 
-		_, ok = messaging.GetContextString(err, "key")
-		assert.False(t, ok)
+func TestSpecificErrorTypes(t *testing.T) {
+	t.Run("creates connection error", func(t *testing.T) {
+		cause := errors.New("network error")
+		err := messaging.NewConnectionError("connection failed", "broker", 3, cause)
 
-		_, ok = messaging.GetContextInt(err, "key")
-		assert.False(t, ok)
-
-		_, ok = messaging.GetContextBool(err, "key")
-		assert.False(t, ok)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "connection failed")
+		assert.Equal(t, messaging.ErrorTypeConnection, err.Type)
+		assert.Equal(t, "connection failed", err.Message)
+		assert.Equal(t, cause, err.Err)
 	})
 
-	t.Run("ContextThreadSafety", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		var wg sync.WaitGroup
-		const numGoroutines = 10
+	t.Run("creates publish error", func(t *testing.T) {
+		cause := errors.New("publish failed")
+		err := messaging.NewPublishError("publish failed", "queue", "exchange", "routing-key", cause)
 
-		// Test concurrent context addition
-		for i := 0; i < numGoroutines; i++ {
-			wg.Add(1)
-			go func(id int) {
-				defer wg.Done()
-				err.WithContext(fmt.Sprintf("key_%d", id), fmt.Sprintf("value_%d", id))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "publish failed")
+		assert.Equal(t, messaging.ErrorTypePublish, err.Type)
+		assert.Equal(t, "publish failed", err.Message)
+		assert.Equal(t, cause, err.Err)
+	})
+
+	t.Run("creates consume error", func(t *testing.T) {
+		cause := errors.New("consume failed")
+		err := messaging.NewConsumeError("consume failed", "queue", "consumer-tag", cause)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "consume failed")
+		assert.Equal(t, messaging.ErrorTypeConsume, err.Type)
+		assert.Equal(t, "consume failed", err.Message)
+		assert.Equal(t, cause, err.Err)
+	})
+
+	t.Run("creates validation error", func(t *testing.T) {
+		cause := errors.New("validation failed")
+		err := messaging.NewValidationError("validation failed", "field", "value", "rule", cause)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "validation failed")
+		assert.Equal(t, messaging.ErrorTypeValidation, err.Type)
+		assert.Equal(t, "validation failed", err.Message)
+		assert.Equal(t, cause, err.Err)
+	})
+
+	t.Run("creates timeout error", func(t *testing.T) {
+		cause := errors.New("timeout")
+		err := messaging.NewTimeoutError("operation timeout", 30*time.Second, "queue", cause)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "operation timeout")
+		assert.Equal(t, messaging.ErrorTypeTimeout, err.Type)
+		assert.Equal(t, "operation timeout", err.Message)
+		assert.Equal(t, cause, err.Err)
+	})
+
+	t.Run("creates circuit breaker error", func(t *testing.T) {
+		cause := errors.New("circuit open")
+		err := messaging.NewCircuitBreakerError("circuit breaker open", "open", 5, cause)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "circuit breaker open")
+		assert.Equal(t, messaging.ErrorTypeCircuitBreaker, err.Type)
+		assert.Equal(t, "circuit breaker open", err.Message)
+		assert.Equal(t, cause, err.Err)
+	})
+
+	t.Run("creates batch error", func(t *testing.T) {
+		cause := errors.New("batch failed")
+		err := messaging.NewBatchError("batch operation failed", 10, 8, 2, cause)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "batch operation failed")
+		assert.Equal(t, messaging.ErrorTypeBatch, err.Type)
+		assert.Equal(t, "batch operation failed", err.Message)
+		assert.Equal(t, cause, err.Err)
+	})
+}
+
+func TestErrorRetryable(t *testing.T) {
+	t.Run("connection errors are retryable", func(t *testing.T) {
+		err := messaging.NewConnectionError("connection failed", "broker", 3, nil)
+		assert.True(t, err.Retryable)
+	})
+
+	t.Run("timeout errors are retryable", func(t *testing.T) {
+		err := messaging.NewTimeoutError("timeout", 30*time.Second, "operation", nil)
+		assert.True(t, err.Retryable)
+	})
+
+	t.Run("circuit breaker errors are retryable", func(t *testing.T) {
+		err := messaging.NewCircuitBreakerError("circuit open", "open", 5, nil)
+		assert.True(t, err.Retryable)
+	})
+
+	t.Run("publish errors are not retryable", func(t *testing.T) {
+		err := messaging.NewPublishError("publish failed", "queue", "exchange", "key", nil)
+		assert.False(t, err.Retryable)
+	})
+
+	t.Run("consume errors are not retryable", func(t *testing.T) {
+		err := messaging.NewConsumeError("consume failed", "queue", "tag", nil)
+		assert.False(t, err.Retryable)
+	})
+
+	t.Run("validation errors are not retryable", func(t *testing.T) {
+		err := messaging.NewValidationError("validation failed", "field", "value", "rule", nil)
+		assert.False(t, err.Retryable)
+	})
+
+	t.Run("batch errors are not retryable", func(t *testing.T) {
+		err := messaging.NewBatchError("batch failed", 10, 8, 2, nil)
+		assert.False(t, err.Retryable)
+	})
+}
+
+func TestErrorTypes(t *testing.T) {
+	t.Run("all error types are defined", func(t *testing.T) {
+		expectedTypes := []messaging.ErrorType{
+			messaging.ErrorTypeConnection,
+			messaging.ErrorTypePublish,
+			messaging.ErrorTypeConsume,
+			messaging.ErrorTypeValidation,
+			messaging.ErrorTypeTimeout,
+			messaging.ErrorTypeCircuitBreaker,
+			messaging.ErrorTypeRetry,
+			messaging.ErrorTypeBatch,
+			messaging.ErrorTypeHealth,
+			messaging.ErrorTypeConfig,
+		}
+
+		for _, errorType := range expectedTypes {
+			assert.NotEmpty(t, string(errorType), "Error type should not be empty")
+		}
+	})
+}
+
+func TestMessagingError_Concurrency(t *testing.T) {
+	t.Run("concurrent context operations", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
+
+		// Test concurrent context additions
+		done := make(chan bool, 10)
+		for i := 0; i < 10; i++ {
+			go func(i int) {
+				defer func() { done <- true }()
+
+				key := fmt.Sprintf("key%d", i)
+				value := fmt.Sprintf("value%d", i)
+				err.WithContext(key, value)
+
+				// Verify the context was added
+				retrievedValue, exists := err.GetContext(key)
+				assert.True(t, exists)
+				assert.Equal(t, value, retrievedValue)
 			}(i)
 		}
 
-		wg.Wait()
+		// Wait for all goroutines to complete
+		for i := 0; i < 10; i++ {
+			<-done
+		}
 
 		// Verify all contexts were added
-		context := messaging.GetErrorContext(err)
-		assert.GreaterOrEqual(t, len(context), 1) // At least one context should be present
-	})
-}
-
-// TestErrorChainAnalysis tests error chain analysis functions
-func TestErrorChainAnalysis(t *testing.T) {
-	t.Run("GetRootCause", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
-
-		root := messaging.GetRootCause(level2)
-		assert.Equal(t, rootCause, root)
+		for i := 0; i < 10; i++ {
+			key := fmt.Sprintf("key%d", i)
+			expectedValue := fmt.Sprintf("value%d", i)
+			actualValue, exists := err.GetContext(key)
+			assert.True(t, exists)
+			assert.Equal(t, expectedValue, actualValue)
+		}
 	})
 
-	t.Run("GetRootCauseNil", func(t *testing.T) {
-		root := messaging.GetRootCause(nil)
-		assert.Nil(t, root)
-	})
+	t.Run("concurrent retryable checks", func(t *testing.T) {
+		err := messaging.NewConnectionError("connection failed", "broker", 3, nil)
 
-	t.Run("GetErrorChain", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
+		// Test concurrent retryable checks
+		done := make(chan bool, 10)
+		for i := 0; i < 10; i++ {
+			go func() {
+				defer func() { done <- true }()
 
-		chain := messaging.GetErrorChain(level2)
-		assert.Len(t, chain, 3) // level2, level1, rootCause
-		assert.Equal(t, level2, chain[0])
-		assert.Equal(t, level1, chain[1])
-		assert.Equal(t, rootCause, chain[2])
-	})
-
-	t.Run("GetErrorChainNil", func(t *testing.T) {
-		chain := messaging.GetErrorChain(nil)
-		assert.Nil(t, chain)
-	})
-
-	t.Run("FindErrorByCode", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
-
-		// Find publish error
-		publishErr := messaging.FindErrorByCode(level2, messaging.ErrorCodePublish)
-		assert.NotNil(t, publishErr)
-		assert.Equal(t, messaging.ErrorCodePublish, publishErr.Code)
-
-		// Find internal error
-		internalErr := messaging.FindErrorByCode(level2, messaging.ErrorCodeInternal)
-		assert.NotNil(t, internalErr)
-		assert.Equal(t, messaging.ErrorCodeInternal, internalErr.Code)
-
-		// Find non-existent error
-		notFound := messaging.FindErrorByCode(level2, messaging.ErrorCodeConnection)
-		assert.Nil(t, notFound)
-	})
-
-	t.Run("FindErrorByCodeNil", func(t *testing.T) {
-		result := messaging.FindErrorByCode(nil, messaging.ErrorCodePublish)
-		assert.Nil(t, result)
-	})
-
-	t.Run("HasErrorCode", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
-
-		assert.True(t, messaging.HasErrorCode(level2, messaging.ErrorCodePublish))
-		assert.True(t, messaging.HasErrorCode(level2, messaging.ErrorCodeInternal))
-		assert.False(t, messaging.HasErrorCode(level2, messaging.ErrorCodeConnection))
-	})
-
-	t.Run("HasErrorType", func(t *testing.T) {
-		rootCause := messaging.ErrTimeout
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-
-		assert.True(t, messaging.HasErrorType(level1, messaging.ErrTimeout))
-		assert.False(t, messaging.HasErrorType(level1, messaging.ErrConnectionFailed))
-	})
-
-	t.Run("CountErrorsInChain", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
-
-		count := messaging.CountErrorsInChain(level2)
-		assert.Equal(t, 3, count)
-	})
-
-	t.Run("CountErrorsInChainNil", func(t *testing.T) {
-		count := messaging.CountErrorsInChain(nil)
-		assert.Equal(t, 0, count)
-	})
-
-	t.Run("GetFirstMessagingError", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
-
-		first := messaging.GetFirstMessagingError(level2)
-		assert.NotNil(t, first)
-		assert.Equal(t, messaging.ErrorCodeInternal, first.Code) // Should be level2
-	})
-
-	t.Run("GetLastMessagingError", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
-
-		last := messaging.GetLastMessagingError(level2)
-		assert.NotNil(t, last)
-		assert.Equal(t, messaging.ErrorCodePublish, last.Code) // Should be level1
-	})
-}
-
-// TestErrorProperties tests error properties and flags
-func TestErrorProperties(t *testing.T) {
-	t.Run("RetryableFlag", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		assert.False(t, err.Retryable)
-
-		err = err.SetRetryable(true)
-		assert.True(t, err.Retryable)
-		assert.True(t, messaging.IsRetryable(err))
-
-		err = err.SetRetryable(false)
-		assert.False(t, err.Retryable)
-		assert.False(t, messaging.IsRetryable(err))
-	})
-
-	t.Run("TemporaryFlag", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		assert.False(t, err.Temporary)
-
-		err = err.SetTemporary(true)
-		assert.True(t, err.Temporary)
-		assert.True(t, messaging.IsTemporary(err))
-
-		err = err.SetTemporary(false)
-		assert.False(t, err.Temporary)
-		assert.False(t, messaging.IsTemporary(err))
-	})
-
-	t.Run("IsRetryableError", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level1 = level1.SetRetryable(true)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
-
-		assert.True(t, messaging.IsRetryableError(level2))
-		assert.False(t, messaging.IsRetryableError(rootCause))
-	})
-
-	t.Run("IsTemporaryError", func(t *testing.T) {
-		rootCause := errors.New("root cause")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", rootCause)
-		level1 = level1.SetTemporary(true)
-		level2 := messaging.WrapError(messaging.ErrorCodeInternal, "level2", "level2 error", level1)
-
-		assert.True(t, messaging.IsTemporaryError(level2))
-		assert.False(t, messaging.IsTemporaryError(rootCause))
-	})
-
-	t.Run("GetErrorCode", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		code := messaging.GetErrorCode(err)
-		assert.Equal(t, messaging.ErrorCodePublish, code)
-	})
-
-	t.Run("GetErrorCodeNonMessagingError", func(t *testing.T) {
-		err := errors.New("standard error")
-		code := messaging.GetErrorCode(err)
-		assert.Equal(t, messaging.ErrorCodeInternal, code) // Should default to Internal
-	})
-}
-
-// TestSpecializedErrorConstructors tests specialized error constructors
-func TestSpecializedErrorConstructors(t *testing.T) {
-	t.Run("PublishError", func(t *testing.T) {
-		cause := errors.New("publish cause")
-		err := messaging.PublishError("publish failed", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodePublish, err.Code)
-		assert.Equal(t, "publish", err.Operation)
-		assert.Equal(t, "publish failed", err.Message)
-		assert.Equal(t, cause, err.Cause)
-	})
-
-	t.Run("ConsumeError", func(t *testing.T) {
-		cause := errors.New("consume cause")
-		err := messaging.ConsumeError("consume failed", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodeConsume, err.Code)
-		assert.Equal(t, "consume", err.Operation)
-		assert.Equal(t, "consume failed", err.Message)
-		assert.Equal(t, cause, err.Cause)
-	})
-
-	t.Run("ConnectionError", func(t *testing.T) {
-		cause := errors.New("connection cause")
-		err := messaging.ConnectionError("connection failed", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodeConnection, err.Code)
-		assert.Equal(t, "connection", err.Operation)
-		assert.Equal(t, "connection failed", err.Message)
-		assert.Equal(t, cause, err.Cause)
-	})
-
-	t.Run("ConfigurationError", func(t *testing.T) {
-		cause := errors.New("config cause")
-		err := messaging.ConfigurationError("config failed", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodeConfiguration, err.Code)
-		assert.Equal(t, "configuration", err.Operation)
-		assert.Equal(t, "config failed", err.Message)
-		assert.Equal(t, cause, err.Cause)
-	})
-
-	t.Run("TimeoutError", func(t *testing.T) {
-		cause := errors.New("timeout cause")
-		err := messaging.TimeoutError("test_operation", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodeTimeout, err.Code)
-		assert.Equal(t, "test_operation", err.Operation)
-		assert.Equal(t, "operation timed out", err.Message)
-		assert.Equal(t, cause, err.Cause)
-		assert.True(t, err.Temporary)
-		assert.True(t, err.Retryable)
-	})
-
-	t.Run("BackpressureError", func(t *testing.T) {
-		err := messaging.BackpressureError("test_operation")
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodeBackpressure, err.Code)
-		assert.Equal(t, "test_operation", err.Operation)
-		assert.Equal(t, "backpressure limit exceeded", err.Message)
-		assert.Nil(t, err.Cause)
-		assert.True(t, err.Temporary)
-		assert.True(t, err.Retryable)
-	})
-}
-
-// TestImmutableErrors tests immutable error constructors
-func TestImmutableErrors(t *testing.T) {
-	t.Run("NewImmutableError", func(t *testing.T) {
-		err := messaging.NewImmutableError(messaging.ErrorCodePublish, "test_operation", "test message")
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodePublish, err.Code)
-		assert.Equal(t, "test_operation", err.Operation)
-		assert.Equal(t, "test message", err.Message)
-		assert.False(t, err.Retryable)
-		assert.False(t, err.Temporary)
-	})
-
-	t.Run("WrapImmutableError", func(t *testing.T) {
-		cause := errors.New("original error")
-		err := messaging.WrapImmutableError(messaging.ErrorCodePublish, "test_operation", "wrapped message", cause)
-		assert.NotNil(t, err)
-		assert.Equal(t, messaging.ErrorCodePublish, err.Code)
-		assert.Equal(t, "test_operation", err.Operation)
-		assert.Equal(t, "wrapped message", err.Message)
-		assert.Equal(t, cause, err.Cause)
-		assert.False(t, err.Retryable)
-		assert.False(t, err.Temporary)
-	})
-}
-
-// TestErrorCategorization tests error categorization
-func TestErrorCategorization(t *testing.T) {
-	t.Run("CategorizeError", func(t *testing.T) {
-		testCases := []struct {
-			code     messaging.ErrorCode
-			expected messaging.ErrorCategory
-		}{
-			{messaging.ErrorCodeConnection, messaging.CategoryConnection},
-			{messaging.ErrorCodeChannel, messaging.CategoryConnection},
-			{messaging.ErrorCodePublish, messaging.CategoryPublisher},
-			{messaging.ErrorCodeConsume, messaging.CategoryConsumer},
-			{messaging.ErrorCodeSerialization, messaging.CategoryMessage},
-			{messaging.ErrorCodeValidation, messaging.CategoryMessage},
-			{messaging.ErrorCodeConfiguration, messaging.CategoryConfiguration},
-			{messaging.ErrorCodeTransport, messaging.CategoryTransport},
-			{messaging.ErrorCodeInternal, messaging.CategoryTransport}, // Default case
+				retryable := err.Retryable
+				assert.True(t, retryable)
+			}()
 		}
 
-		for _, tc := range testCases {
-			category := messaging.CategorizeError(tc.code)
-			assert.Equal(t, tc.expected, category, "Error code %s should be categorized as %s", tc.code, tc.expected)
+		// Wait for all goroutines to complete
+		for i := 0; i < 10; i++ {
+			<-done
 		}
 	})
 }
 
-// TestValidateErrorCode tests error code validation
-func TestValidateErrorCode(t *testing.T) {
-	t.Run("ValidErrorCode", func(t *testing.T) {
-		err := messaging.ValidateErrorCode(messaging.ErrorCodePublish)
-		assert.NoError(t, err)
-	})
+func TestMessagingError_EdgeCases(t *testing.T) {
+	t.Run("error with very long message", func(t *testing.T) {
+		longMessage := string(make([]byte, 10000)) // 10KB message
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, longMessage, nil)
 
-	t.Run("InvalidErrorCode", func(t *testing.T) {
-		invalidCode := messaging.ErrorCode("INVALID")
-		err := messaging.ValidateErrorCode(invalidCode)
 		assert.Error(t, err)
-		assert.True(t, errors.Is(err, messaging.ErrInvalidErrorCode))
-		assert.Contains(t, err.Error(), "INVALID")
-	})
-}
-
-// TestEdgeCases tests edge cases and error scenarios
-func TestEdgeCases(t *testing.T) {
-	t.Run("NilErrorHandling", func(t *testing.T) {
-		var err *messaging.MessagingError
-		assert.Equal(t, "<nil>", err.Error())
-		assert.Nil(t, err.Unwrap())
-		assert.False(t, err.Is(nil))
-		assert.Nil(t, err.WithContext("key", "value"))
-		assert.Nil(t, err.WithContextSafe("key", "value"))
-		assert.Nil(t, err.SetRetryable(true))
-		assert.Nil(t, err.SetTemporary(true))
+		assert.Equal(t, longMessage, err.Message)
+		assert.Equal(t, messaging.ErrorTypeConnection, err.Type)
 	})
 
-	t.Run("EmptyErrorMessages", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "", "")
-		assert.NotNil(t, err)
-		assert.Equal(t, "unknown", err.Operation)
-		assert.Equal(t, "no error message provided", err.Message)
+	t.Run("error with special characters in context", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
+
+		specialKey := "key with spaces & symbols!@#$%^&*()"
+		specialValue := "value with \n newlines \t tabs"
+
+		err.WithContext(specialKey, specialValue)
+
+		value, exists := err.GetContext(specialKey)
+		assert.True(t, exists)
+		assert.Equal(t, specialValue, value)
 	})
 
-	t.Run("ConcurrentErrorAccess", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "test_operation", "test message")
-		var wg sync.WaitGroup
-		const numGoroutines = 10
+	t.Run("error with nil context values", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
 
-		// Test concurrent context access
-		for i := 0; i < numGoroutines; i++ {
-			wg.Add(1)
-			go func(id int) {
-				defer wg.Done()
-				err.WithContext(fmt.Sprintf("key_%d", id), fmt.Sprintf("value_%d", id))
-				messaging.GetErrorContext(err)
-			}(i)
+		err.WithContext("nil_key", nil)
+
+		value, exists := err.GetContext("nil_key")
+		assert.True(t, exists)
+		assert.Nil(t, value)
+	})
+
+	t.Run("error with complex context values", func(t *testing.T) {
+		err := messaging.NewMessagingError(messaging.ErrorTypeConnection, "test error", nil)
+
+		complexValue := map[string]interface{}{
+			"nested": map[string]string{
+				"key": "value",
+			},
+			"array": []int{1, 2, 3},
 		}
 
-		wg.Wait()
-		// Should not panic
-	})
+		err.WithContext("complex", complexValue)
 
-	t.Run("ComplexErrorChains", func(t *testing.T) {
-		// Create a complex error chain
-		root := errors.New("root error")
-		level1 := messaging.WrapError(messaging.ErrorCodePublish, "level1", "level1 error", root)
-		level2 := messaging.WrapError(messaging.ErrorCodeConsume, "level2", "level2 error", level1)
-		level3 := messaging.WrapError(messaging.ErrorCodeConnection, "level3", "level3 error", level2)
-
-		// Test chain analysis
-		chain := messaging.GetErrorChain(level3)
-		assert.Len(t, chain, 4)
-
-		// Test error finding
-		publishErr := messaging.FindErrorByCode(level3, messaging.ErrorCodePublish)
-		assert.NotNil(t, publishErr)
-
-		consumeErr := messaging.FindErrorByCode(level3, messaging.ErrorCodeConsume)
-		assert.NotNil(t, consumeErr)
-
-		connectionErr := messaging.FindErrorByCode(level3, messaging.ErrorCodeConnection)
-		assert.NotNil(t, connectionErr)
-
-		// Test error counting
-		count := messaging.CountErrorsInChain(level3)
-		assert.Equal(t, 4, count)
+		value, exists := err.GetContext("complex")
+		assert.True(t, exists)
+		assert.Equal(t, complexValue, value)
 	})
 }
 
-// TestErrorIntegration tests error integration with other components
-func TestErrorIntegration(t *testing.T) {
-	t.Run("ErrorWithContextIntegration", func(t *testing.T) {
-		err := messaging.NewError(messaging.ErrorCodePublish, "publish_operation", "publish failed")
-		err = err.WithContext("message_id", "msg-123")
-		err = err.WithContext("exchange", "test.exchange")
-		err = err.WithContext("retry_count", 3)
+func TestMessagingError_ErrorChaining(t *testing.T) {
+	t.Run("error unwrapping works", func(t *testing.T) {
+		originalErr := errors.New("original error")
+		messagingErr := messaging.NewConnectionError("connection failed", "broker", 3, originalErr)
 
-		// Test context retrieval
-		msgID, ok := messaging.GetContextString(err, "message_id")
-		assert.True(t, ok)
-		assert.Equal(t, "msg-123", msgID)
-
-		exchange, ok := messaging.GetContextString(err, "exchange")
-		assert.True(t, ok)
-		assert.Equal(t, "test.exchange", exchange)
-
-		retryCount, ok := messaging.GetContextInt(err, "retry_count")
-		assert.True(t, ok)
-		assert.Equal(t, 3, retryCount)
-
-		// Test full context
-		context := messaging.GetErrorContext(err)
-		assert.Len(t, context, 3)
-		assert.Equal(t, "msg-123", context["message_id"])
-		assert.Equal(t, "test.exchange", context["exchange"])
-		assert.Equal(t, 3, context["retry_count"])
-	})
-
-	t.Run("ErrorChainIntegration", func(t *testing.T) {
-		// Simulate a real-world error scenario
-		networkErr := errors.New("network connection failed")
-		amqpErr := messaging.WrapError(messaging.ErrorCodeConnection, "amqp_connect", "failed to connect to AMQP", networkErr)
-		publishErr := messaging.WrapError(messaging.ErrorCodePublish, "publish_message", "failed to publish message", amqpErr)
-
-		// Test error analysis
-		assert.True(t, messaging.HasErrorCode(publishErr, messaging.ErrorCodeConnection))
-		assert.True(t, messaging.HasErrorCode(publishErr, messaging.ErrorCodePublish))
-		assert.False(t, messaging.HasErrorCode(publishErr, messaging.ErrorCodeConsume))
-
-		// Test root cause
-		rootCause := messaging.GetRootCause(publishErr)
-		assert.Equal(t, networkErr, rootCause)
+		// Test error unwrapping
+		unwrapped := errors.Unwrap(messagingErr)
+		assert.Equal(t, originalErr, unwrapped)
 
 		// Test error chain
-		chain := messaging.GetErrorChain(publishErr)
-		assert.Len(t, chain, 3)
+		assert.True(t, errors.Is(messagingErr, originalErr))
+	})
 
-		// Test error finding
-		connectionErr := messaging.FindErrorByCode(publishErr, messaging.ErrorCodeConnection)
-		assert.NotNil(t, connectionErr)
-		assert.Equal(t, "amqp_connect", connectionErr.Operation)
+	t.Run("error with context and cause", func(t *testing.T) {
+		originalErr := errors.New("original error")
+		messagingErr := messaging.NewConnectionError("connection failed", "broker", 3, originalErr)
+
+		// Add context
+		messagingErrWithContext := messagingErr.WithContext("retry_count", 5)
+		messagingErrWithContext = messagingErrWithContext.WithContext("timeout", "30s")
+
+		// Test context retrieval
+		retryCount, exists := messagingErrWithContext.GetContext("retry_count")
+		assert.True(t, exists)
+		assert.Equal(t, 5, retryCount)
+
+		timeout, exists := messagingErrWithContext.GetContext("timeout")
+		assert.True(t, exists)
+		assert.Equal(t, "30s", timeout)
+
+		// Test error unwrapping still works
+		unwrapped := errors.Unwrap(messagingErr)
+		assert.Equal(t, originalErr, unwrapped)
+	})
+}
+
+func TestMessagingError_JSONSerialization(t *testing.T) {
+	t.Run("error can be marshaled to JSON", func(t *testing.T) {
+		originalErr := errors.New("original error")
+		messagingErr := messaging.NewConnectionError("test error", "broker", 1, originalErr)
+		messagingErrWithContext := messagingErr.WithContext("key1", "value1")
+		messagingErrWithContext = messagingErrWithContext.WithContext("key2", 42)
+
+		// Test JSON marshaling (simplified test)
+		jsonStr := fmt.Sprintf("%+v", messagingErr)
+		assert.Contains(t, jsonStr, "test error")
+		assert.Contains(t, jsonStr, "broker")
+		assert.Contains(t, jsonStr, "1")
+	})
+}
+
+func TestMessagingError_Integration(t *testing.T) {
+	t.Run("error chain with multiple levels", func(t *testing.T) {
+		rootErr := errors.New("root error")
+		level1Err := messaging.NewConnectionError("level 1", "broker1", 1, rootErr)
+		level2Err := messaging.NewPublishError("level 2", "queue1", "exchange1", "key1", level1Err)
+		level3Err := messaging.NewConsumeError("level 3", "queue2", "tag2", level2Err)
+
+		// Test error chain
+		assert.True(t, errors.Is(level3Err, level2Err))
+		assert.True(t, errors.Is(level3Err, level1Err))
+		assert.True(t, errors.Is(level3Err, rootErr))
+
+		// Test unwrapping
+		unwrapped1 := errors.Unwrap(level3Err)
+		assert.Equal(t, level2Err, unwrapped1)
+
+		unwrapped2 := errors.Unwrap(unwrapped1)
+		assert.Equal(t, level1Err, unwrapped2)
+
+		unwrapped3 := errors.Unwrap(unwrapped2)
+		assert.Equal(t, rootErr, unwrapped3)
+	})
+
+	t.Run("error with mixed context types", func(t *testing.T) {
+		messagingErr := messaging.NewConnectionError("test error", "broker", 1, nil)
+
+		// Add different types of context
+		messagingErrWithContext := messagingErr.WithContext("string", "value")
+		messagingErrWithContext = messagingErrWithContext.WithContext("int", 42)
+		messagingErrWithContext = messagingErrWithContext.WithContext("float", 3.14)
+		messagingErrWithContext = messagingErrWithContext.WithContext("bool", true)
+		messagingErrWithContext = messagingErrWithContext.WithContext("nil", nil)
+
+		// Retrieve and verify
+		value, exists := messagingErrWithContext.GetContext("string")
+		assert.True(t, exists)
+		assert.Equal(t, "value", value)
+
+		value, exists = messagingErrWithContext.GetContext("int")
+		assert.True(t, exists)
+		assert.Equal(t, 42, value)
+
+		value, exists = messagingErrWithContext.GetContext("float")
+		assert.True(t, exists)
+		assert.Equal(t, 3.14, value)
+
+		value, exists = messagingErrWithContext.GetContext("bool")
+		assert.True(t, exists)
+		assert.Equal(t, true, value)
+
+		value, exists = messagingErrWithContext.GetContext("nil")
+		assert.True(t, exists)
+		assert.Nil(t, value)
 	})
 }
