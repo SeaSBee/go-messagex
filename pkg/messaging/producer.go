@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/seasbee/go-logx"
 	"github.com/wagslane/go-rabbitmq"
 )
 
@@ -16,6 +17,7 @@ type Producer struct {
 	conn        *rabbitmq.Conn
 	publisher   *rabbitmq.Publisher
 	config      *ProducerConfig
+	logger      *logx.Logger
 	mu          sync.RWMutex
 	closed      bool
 	stats       *ProducerStats
@@ -69,7 +71,7 @@ func (p *Producer) checkClosed() error {
 }
 
 // NewProducer creates a new RabbitMQ producer
-func NewProducer(conn *rabbitmq.Conn, config *ProducerConfig) (*Producer, error) {
+func NewProducer(conn *rabbitmq.Conn, config *ProducerConfig, logger *logx.Logger) (*Producer, error) {
 	if conn == nil {
 		return nil, NewConnectionError("connection is nil", "", 0, nil)
 	}
@@ -78,14 +80,21 @@ func NewProducer(conn *rabbitmq.Conn, config *ProducerConfig) (*Producer, error)
 		config = &ProducerConfig{}
 	}
 
+	if logger == nil {
+		return nil, fmt.Errorf("logger is mandatory and cannot be nil")
+	}
+
+	logger.Debug("creating RabbitMQ publisher")
 	publisher, err := rabbitmq.NewPublisher(
 		conn,
 		rabbitmq.WithPublisherOptionsLogging,
 	)
 	if err != nil {
+		logger.Error("failed to create publisher", logx.ErrorField(err))
 		return nil, NewPublishError("failed to create publisher", "", "", "", err)
 	}
 	if publisher == nil {
+		logger.Error("publisher is nil after creation")
 		return nil, NewPublishError("publisher is nil after creation", "", "", "", nil)
 	}
 
@@ -101,14 +110,24 @@ func NewProducer(conn *rabbitmq.Conn, config *ProducerConfig) (*Producer, error)
 		conn:        conn,
 		publisher:   publisher,
 		config:      config,
+		logger:      logger,
 		stats:       &ProducerStats{},
 		batchBuffer: make([]*Message, 0, batchSize),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
 
+	logger.Info("producer created successfully",
+		logx.Int("batch_size", batchSize),
+		logx.String("batch_timeout", config.BatchTimeout.String()),
+	)
+
 	// Start batch timer if batching is enabled
 	if config.BatchSize > 1 {
+		logger.Debug("starting batch processor",
+			logx.Int("batch_size", config.BatchSize),
+			logx.String("batch_timeout", config.BatchTimeout.String()),
+		)
 		producer.batchTimer = time.NewTimer(config.BatchTimeout)
 		go producer.batchProcessor()
 	}
@@ -119,20 +138,46 @@ func NewProducer(conn *rabbitmq.Conn, config *ProducerConfig) (*Producer, error)
 // Publish publishes a single message
 func (p *Producer) Publish(ctx context.Context, msg *Message) error {
 	if msg == nil {
+		p.logger.Error("attempted to publish nil message")
 		return NewPublishError("message is nil", "", "", "", nil)
 	}
 
+	p.logger.Debug("publishing message",
+		logx.String("message_id", msg.ID),
+		logx.String("routing_key", msg.Properties.RoutingKey),
+		logx.Int("size_bytes", len(msg.Body)),
+	)
+
 	if err := p.checkClosed(); err != nil {
+		p.logger.Error("producer is closed, cannot publish", logx.ErrorField(err))
 		return err
 	}
 
 	// If batching is enabled and batch size > 1, add to batch
 	if p.config.BatchSize > 1 {
+		p.logger.Debug("adding message to batch",
+			logx.String("message_id", msg.ID),
+			logx.Int("current_batch_size", len(p.batchBuffer)),
+		)
 		return p.addToBatch(ctx, msg)
 	}
 
 	// Publish immediately
-	return p.publishMessage(ctx, msg)
+	p.logger.Debug("publishing message immediately", logx.String("message_id", msg.ID))
+	err := p.publishMessage(ctx, msg)
+	if err != nil {
+		p.logger.Error("message publish failed",
+			logx.String("message_id", msg.ID),
+			logx.String("routing_key", msg.Properties.RoutingKey),
+			logx.ErrorField(err),
+		)
+	} else {
+		p.logger.Debug("message published successfully",
+			logx.String("message_id", msg.ID),
+			logx.String("routing_key", msg.Properties.RoutingKey),
+		)
+	}
+	return err
 }
 
 // PublishBatch publishes a batch of messages

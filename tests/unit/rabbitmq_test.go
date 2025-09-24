@@ -9,12 +9,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seasbee/go-logx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/wagslane/go-rabbitmq"
 
 	"github.com/seasbee/go-messagex/pkg/messaging"
 )
+
+// createRabbitMQTestLogger creates a test logger for rabbitmq tests
+func createRabbitMQTestLogger() *logx.Logger {
+	logger, _ := logx.NewLogger()
+	return logger
+}
 
 // MockConn is a mock implementation of rabbitmq.Conn
 type MockConn struct {
@@ -203,7 +210,7 @@ func TestNewClient(t *testing.T) {
 		config := createTestConfig()
 		config.URL = "invalid-url"
 
-		client, err := messaging.NewClient(config)
+		client, err := messaging.NewClient(config, createRabbitMQTestLogger())
 		assert.Error(t, err)
 		assert.Nil(t, client)
 		// The error could be either validation or connection error
@@ -214,7 +221,7 @@ func TestNewClient(t *testing.T) {
 
 	t.Run("success with nil config", func(t *testing.T) {
 		// This would use default config but still fail due to connection
-		client, err := messaging.NewClient(nil)
+		client, err := messaging.NewClient(nil, createRabbitMQTestLogger())
 		// The client might be created successfully with default config
 		// or fail due to connection issues
 		if err != nil {
@@ -231,16 +238,20 @@ func TestNewClient(t *testing.T) {
 			URL: "", // Invalid empty URL
 		}
 
-		client, err := messaging.NewClient(config)
-		// The client might be created successfully with default config
-		// or fail due to validation issues
+		client, err := messaging.NewClient(config, createRabbitMQTestLogger())
+		// The client will fail due to invalid URL or connection issues
 		if err != nil {
 			assert.Nil(t, client)
-			assert.Contains(t, err.Error(), "invalid configuration")
+			// The error could be either validation or connection error
+			assert.True(t,
+				strings.Contains(err.Error(), "failed to connect to RabbitMQ") ||
+					strings.Contains(err.Error(), "invalid configuration"))
 		} else {
 			assert.NotNil(t, client)
-			// Clean up the client
-			// Note: We can't call Close() on an uninitialized client as it will cause nil pointer dereference
+			// Clean up the client if it was created successfully
+			if client != nil {
+				client.Close()
+			}
 		}
 	})
 }

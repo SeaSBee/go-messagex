@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/creasty/defaults"
+	"github.com/seasbee/go-logx"
 	"github.com/wagslane/go-rabbitmq"
 )
 
@@ -165,6 +166,7 @@ type Consumer struct {
 	conn        *rabbitmq.Conn
 	consumer    *rabbitmq.Consumer
 	config      *ConsumerConfig
+	logger      *logx.Logger
 	mu          sync.RWMutex
 	closed      bool
 	stats       *ConsumerStats
@@ -244,9 +246,18 @@ type ExchangeOptions struct {
 }
 
 // NewConsumer creates a new RabbitMQ consumer
-func NewConsumer(conn *rabbitmq.Conn, config *ConsumerConfig) (*Consumer, error) {
+func NewConsumer(conn *rabbitmq.Conn, config *ConsumerConfig, logger *logx.Logger) (*Consumer, error) {
+	return NewConsumerWithLogger(conn, config, logger)
+}
+
+// NewConsumerWithLogger creates a new RabbitMQ consumer with a custom logger configuration
+func NewConsumerWithLogger(conn *rabbitmq.Conn, config *ConsumerConfig, logger *logx.Logger) (*Consumer, error) {
 	if conn == nil {
 		return nil, NewConnectionError("connection is nil", "", 0, nil)
+	}
+
+	if logger == nil {
+		return nil, fmt.Errorf("logger is mandatory and cannot be nil")
 	}
 
 	if config == nil {
@@ -254,31 +265,41 @@ func NewConsumer(conn *rabbitmq.Conn, config *ConsumerConfig) (*Consumer, error)
 		// Apply defaults to ensure all fields are properly initialized
 		if err := defaults.Set(config); err != nil {
 			// Log error but continue with manual defaults
-			_ = err
+			logger.Warn("failed to apply defaults to consumer config", logx.ErrorField(err))
 		}
 	}
 
 	// Create a temporary consumer instance to validate config
 	tempConsumer := &Consumer{}
 	if err := tempConsumer.validateConsumerConfig(config); err != nil {
+		logger.Error("consumer config validation failed", logx.ErrorField(err))
 		return nil, err
 	}
 
+	logger.Debug("creating RabbitMQ consumer")
 	consumer, err := rabbitmq.NewConsumer(
 		conn,
 		"",
 		rabbitmq.WithConsumerOptionsLogging,
 	)
 	if err != nil {
+		logger.Error("failed to create consumer", logx.ErrorField(err))
 		return nil, NewConsumeError("failed to create consumer", "", "", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	logger.Info("consumer created successfully",
+		logx.Bool("auto_ack", config.AutoAck),
+		logx.Bool("exclusive", config.Exclusive),
+		logx.Int("prefetch_count", config.PrefetchCount),
+	)
+
 	return &Consumer{
 		conn:      conn,
 		consumer:  consumer,
 		config:    config,
+		logger:    logger,
 		stats:     &ConsumerStats{},
 		consumers: make(map[string]*rabbitmq.Consumer),
 		ctx:       ctx,
@@ -291,7 +312,15 @@ func (c *Consumer) Consume(ctx context.Context, queue string, handler MessageHan
 	if c == nil {
 		return fmt.Errorf("consumer is nil")
 	}
+
+	c.logger.Info("starting message consumption",
+		logx.String("queue", queue),
+	)
+
 	if c.config == nil {
+		c.logger.Warn("consumer config is nil, using default options",
+			logx.String("queue", queue),
+		)
 		// Use default options if config is nil
 		options := &ConsumeOptions{
 			Queue:         queue,

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seasbee/go-logx"
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,12 @@ import (
 type mockHealthConn struct {
 	healthy bool
 	mu      sync.RWMutex
+}
+
+// createHealthTestLogger creates a test logger for health tests
+func createHealthTestLogger() *logx.Logger {
+	logger, _ := logx.NewLogger()
+	return logger
 }
 
 func (m *mockHealthConn) IsClosed() bool {
@@ -38,7 +45,7 @@ func TestNewHealthChecker(t *testing.T) {
 	t.Run("creates health checker with valid connection", func(t *testing.T) {
 		interval := 1 * time.Second
 
-		healthChecker := messaging.NewHealthChecker(nil, interval)
+		healthChecker := messaging.NewHealthChecker(nil, interval, createHealthTestLogger())
 
 		require.NotNil(t, healthChecker)
 		assert.False(t, healthChecker.IsHealthy())
@@ -50,7 +57,7 @@ func TestNewHealthChecker(t *testing.T) {
 	t.Run("creates health checker with nil connection", func(t *testing.T) {
 		interval := 1 * time.Second
 
-		healthChecker := messaging.NewHealthChecker(nil, interval)
+		healthChecker := messaging.NewHealthChecker(nil, interval, createHealthTestLogger())
 
 		require.NotNil(t, healthChecker)
 		assert.False(t, healthChecker.IsHealthy())
@@ -63,7 +70,7 @@ func TestNewHealthChecker(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
 		interval := 0 * time.Second
 
-		healthChecker := messaging.NewHealthChecker(nil, interval)
+		healthChecker := messaging.NewHealthChecker(nil, interval, createHealthTestLogger())
 
 		require.NotNil(t, healthChecker)
 		assert.False(t, healthChecker.IsHealthy())
@@ -76,7 +83,7 @@ func TestNewHealthChecker(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
 		interval := -1 * time.Second
 
-		healthChecker := messaging.NewHealthChecker(nil, interval)
+		healthChecker := messaging.NewHealthChecker(nil, interval, createHealthTestLogger())
 
 		require.NotNil(t, healthChecker)
 		assert.False(t, healthChecker.IsHealthy())
@@ -89,7 +96,7 @@ func TestNewHealthChecker(t *testing.T) {
 func TestHealthChecker_IsHealthy(t *testing.T) {
 	t.Run("returns true for healthy connection", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		assert.False(t, healthChecker.IsHealthy())
@@ -97,14 +104,14 @@ func TestHealthChecker_IsHealthy(t *testing.T) {
 
 	t.Run("returns false for unhealthy connection", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		assert.False(t, healthChecker.IsHealthy())
 	})
 
 	t.Run("returns false for nil connection", func(t *testing.T) {
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		assert.False(t, healthChecker.IsHealthy())
@@ -114,7 +121,7 @@ func TestHealthChecker_IsHealthy(t *testing.T) {
 func TestHealthChecker_CheckNow(t *testing.T) {
 	t.Run("performs immediate health check", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Perform immediate check
@@ -124,7 +131,7 @@ func TestHealthChecker_CheckNow(t *testing.T) {
 
 	t.Run("performs immediate health check on unhealthy connection", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Perform immediate check
@@ -134,7 +141,7 @@ func TestHealthChecker_CheckNow(t *testing.T) {
 
 	t.Run("updates last check time", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Get initial stats
@@ -155,7 +162,7 @@ func TestHealthChecker_CheckNow(t *testing.T) {
 func TestHealthChecker_GetStats(t *testing.T) {
 	t.Run("returns comprehensive stats", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		stats := healthChecker.GetStats()
@@ -168,7 +175,7 @@ func TestHealthChecker_GetStats(t *testing.T) {
 
 	t.Run("stats reflect health changes", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 100*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 100*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Initial stats
@@ -187,7 +194,7 @@ func TestHealthChecker_GetStats(t *testing.T) {
 func TestHealthChecker_WaitForHealthy(t *testing.T) {
 	t.Run("waits for healthy connection", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Start waiting in goroutine
@@ -212,7 +219,7 @@ func TestHealthChecker_WaitForHealthy(t *testing.T) {
 
 	t.Run("times out waiting for healthy connection", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		err := healthChecker.WaitForHealthy(100 * time.Millisecond)
@@ -222,7 +229,7 @@ func TestHealthChecker_WaitForHealthy(t *testing.T) {
 
 	t.Run("returns immediately if already healthy", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		start := time.Now()
@@ -239,7 +246,7 @@ func TestHealthChecker_WaitForHealthy(t *testing.T) {
 func TestHealthChecker_WaitForUnhealthy(t *testing.T) {
 	t.Run("waits for unhealthy connection", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Start waiting in goroutine
@@ -262,7 +269,7 @@ func TestHealthChecker_WaitForUnhealthy(t *testing.T) {
 
 	t.Run("times out waiting for unhealthy connection", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// For nil connection, it's always unhealthy, so should return immediately
@@ -276,7 +283,7 @@ func TestHealthChecker_WaitForUnhealthy(t *testing.T) {
 
 	t.Run("returns immediately if already unhealthy", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		start := time.Now()
@@ -291,7 +298,7 @@ func TestHealthChecker_WaitForUnhealthy(t *testing.T) {
 func TestHealthChecker_Stop(t *testing.T) {
 	t.Run("stops health checking", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 
 		// Get initial check count
 		initialStats := healthChecker.GetStats()
@@ -323,7 +330,7 @@ func TestHealthChecker_Stop(t *testing.T) {
 
 	t.Run("multiple stop calls are safe", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Second, createHealthTestLogger())
 
 		// Multiple stop calls should not panic
 		healthChecker.Close()
@@ -335,7 +342,7 @@ func TestHealthChecker_Stop(t *testing.T) {
 func TestHealthChecker_Concurrency(t *testing.T) {
 	t.Run("concurrent health checks", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		var wg sync.WaitGroup
@@ -364,7 +371,7 @@ func TestHealthChecker_Concurrency(t *testing.T) {
 
 	t.Run("concurrent wait operations", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		var wg sync.WaitGroup
@@ -391,7 +398,7 @@ func TestHealthChecker_Concurrency(t *testing.T) {
 func TestHealthChecker_EdgeCases(t *testing.T) {
 	t.Run("health checker with very short interval", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Wait for some checks
@@ -406,7 +413,7 @@ func TestHealthChecker_EdgeCases(t *testing.T) {
 
 	t.Run("health checker with very long interval", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 10*time.Second)
+		healthChecker := messaging.NewHealthChecker(nil, 10*time.Second, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Wait a short time
@@ -421,7 +428,7 @@ func TestHealthChecker_EdgeCases(t *testing.T) {
 
 	t.Run("health checker with connection that changes frequently", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 		defer healthChecker.Close()
 
 		// Change connection health frequently
@@ -440,7 +447,7 @@ func TestHealthChecker_EdgeCases(t *testing.T) {
 func TestHealthChecker_Integration(t *testing.T) {
 	t.Run("full health checker lifecycle", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 100*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 100*time.Millisecond, createHealthTestLogger())
 		require.NotNil(t, healthChecker)
 
 		// Verify initial state
@@ -462,7 +469,7 @@ func TestHealthChecker_Integration(t *testing.T) {
 
 	t.Run("health checker with connection state changes", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 50*time.Millisecond, createHealthTestLogger())
 		require.NotNil(t, healthChecker)
 
 		defer healthChecker.Close()
@@ -493,7 +500,7 @@ func TestHealthChecker_Integration(t *testing.T) {
 func TestHealthChecker_String(t *testing.T) {
 	t.Run("returns string representation", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 100*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 100*time.Millisecond, createHealthTestLogger())
 		require.NotNil(t, healthChecker)
 
 		defer healthChecker.Close()
@@ -508,7 +515,7 @@ func TestHealthChecker_String(t *testing.T) {
 func TestHealthChecker_StressTest(t *testing.T) {
 	t.Run("rapid health state changes", func(t *testing.T) {
 		// Use nil connection since we can't easily mock *rabbitmq.Conn
-		healthChecker := messaging.NewHealthChecker(nil, 1*time.Millisecond)
+		healthChecker := messaging.NewHealthChecker(nil, 1*time.Millisecond, createHealthTestLogger())
 		require.NotNil(t, healthChecker)
 
 		defer healthChecker.Close()

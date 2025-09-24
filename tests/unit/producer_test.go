@@ -6,13 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seasbee/go-logx"
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 )
 
-// MockConnection represents a mock RabbitMQ connection for testing
-type MockConnection struct {
-	healthy bool
+// createProducerTestLogger creates a test logger for producer tests
+func createProducerTestLogger() *logx.Logger {
+	logger, _ := logx.NewLogger()
+	return logger
 }
 
 // MockPublisher represents a mock RabbitMQ publisher for testing
@@ -49,7 +51,7 @@ func TestNewProducer(t *testing.T) {
 			BatchTimeout: 1 * time.Second,
 		}
 
-		producer, err := messaging.NewProducer(nil, config)
+		producer, err := messaging.NewProducer(nil, config, createProducerTestLogger())
 
 		assert.Error(t, err)
 		assert.Nil(t, producer)

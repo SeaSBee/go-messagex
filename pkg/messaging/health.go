@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/seasbee/go-logx"
 	"github.com/wagslane/go-rabbitmq"
 )
 
@@ -50,8 +51,9 @@ type HealthStats struct {
 }
 
 // NewHealthChecker creates a new health checker
-func NewHealthChecker(conn *rabbitmq.Conn, interval time.Duration) *HealthChecker {
+func NewHealthChecker(conn *rabbitmq.Conn, interval time.Duration, logger *logx.Logger) *HealthChecker {
 	if conn == nil {
+		logx.Warn("connection is nil, health checker will report unhealthy")
 		// Return a health checker that will always report unhealthy
 		ctx, cancel := context.WithCancel(context.Background())
 		hc := &HealthChecker{
@@ -67,7 +69,14 @@ func NewHealthChecker(conn *rabbitmq.Conn, interval time.Duration) *HealthChecke
 
 	if interval <= 0 {
 		interval = 30 * time.Second // Default interval
+		logx.Info("using default health check interval",
+			logx.String("interval", interval.String()),
+		)
 	}
+
+	logx.Info("creating health checker",
+		logx.String("interval", interval.String()),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -79,6 +88,10 @@ func NewHealthChecker(conn *rabbitmq.Conn, interval time.Duration) *HealthChecke
 		cancel:   cancel,
 	}
 
+	logx.Info("starting health checker",
+		logx.String("interval", interval.String()),
+	)
+
 	// Start health checking in a goroutine
 	go hc.startHealthChecking()
 
@@ -87,12 +100,14 @@ func NewHealthChecker(conn *rabbitmq.Conn, interval time.Duration) *HealthChecke
 
 // startHealthChecking starts the health checking loop
 func (hc *HealthChecker) startHealthChecking() {
+	logx.Debug("health checking loop started")
 	ticker := time.NewTicker(hc.interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-hc.ctx.Done():
+			logx.Debug("health checking loop stopped")
 			return
 		case <-ticker.C:
 			hc.performHealthCheck()
@@ -108,8 +123,11 @@ func (hc *HealthChecker) performHealthCheck() {
 	atomic.AddInt64(&hc.checkCount, 1)
 	atomic.StoreInt64(&hc.lastCheck, time.Now().UnixNano())
 
+	logx.Debug("performing health check")
+
 	// Check if connection is closed
 	if hc.closed {
+		logx.Warn("health checker is closed, marking as unhealthy")
 		hc.setStatus(StatusUnhealthy, fmt.Errorf("health checker is closed"))
 		return
 	}
@@ -309,22 +327,4 @@ func (hc *HealthChecker) WaitForUnhealthy(timeout time.Duration) error {
 			}
 		}
 	}
-}
-
-// performHealthCheckInternal performs the actual health check logic
-func (hc *HealthChecker) performHealthCheckInternal() error {
-	// Check if connection is closed
-	if hc.closed {
-		return fmt.Errorf("health checker is closed")
-	}
-
-	// Check if connection is nil
-	if hc.conn == nil {
-		return fmt.Errorf("connection is nil")
-	}
-
-	// Perform a simple health check by trying to get connection info
-	// Note: go-rabbitmq doesn't expose connection state directly
-	// We'll assume the connection is healthy if it's not nil and not closed
-	return nil
 }

@@ -12,8 +12,14 @@ import (
 func main() {
 	fmt.Println("=== RabbitMQ Consumer Example ===")
 
+	// Create a logger (mandatory)
+	logger, err := logx.NewLogger()
+	if err != nil {
+		logx.Fatal("Failed to create logger", logx.ErrorField(err))
+	}
+
 	// Create a new RabbitMQ client with default configuration
-	client, err := messaging.NewClient(nil)
+	client, err := messaging.NewClient(nil, logger)
 	if err != nil {
 		logx.Fatal("Failed to create client", logx.ErrorField(err))
 	}

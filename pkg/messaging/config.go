@@ -60,6 +60,36 @@ type Config struct {
 	// Monitoring
 	MetricsEnabled      bool          `yaml:"metrics_enabled" json:"metrics_enabled" default:"true"`
 	HealthCheckInterval time.Duration `yaml:"health_check_interval" json:"health_check_interval" validate:"min:1s,max:300s" default:"30s"`
+
+	// Logging configuration
+	Logging LoggingConfig `yaml:"logging" json:"logging" validate:"required"`
+}
+
+// LoggingConfig contains logging configuration
+type LoggingConfig struct {
+	// Log level (debug, info, warn, error)
+	Level string `yaml:"level" json:"level" validate:"oneof:debug info warn error" default:"info"`
+
+	// Enable structured logging
+	Structured bool `yaml:"structured" json:"structured" default:"true"`
+
+	// Enable request/response logging
+	EnableRequestLogging bool `yaml:"enable_request_logging" json:"enable_request_logging" default:"true"`
+
+	// Enable performance logging
+	EnablePerformanceLogging bool `yaml:"enable_performance_logging" json:"enable_performance_logging" default:"false"`
+
+	// Enable health check logging
+	EnableHealthLogging bool `yaml:"enable_health_logging" json:"enable_health_logging" default:"true"`
+
+	// Log format (json, text)
+	Format string `yaml:"format" json:"format" validate:"oneof:json text" default:"json"`
+
+	// Include caller information
+	IncludeCaller bool `yaml:"include_caller" json:"include_caller" default:"false"`
+
+	// Include stack trace on errors
+	IncludeStackTrace bool `yaml:"include_stack_trace" json:"include_stack_trace" default:"false"`
 }
 
 // ProducerConfig contains producer-specific configuration

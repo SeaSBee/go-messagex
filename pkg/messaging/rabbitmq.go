@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seasbee/go-logx"
 	"github.com/wagslane/go-rabbitmq"
 )
 
@@ -17,14 +18,15 @@ type Client struct {
 	producer *Producer
 	consumer *Consumer
 	health   *HealthChecker
+	logger   *logx.Logger
 	mu       sync.RWMutex
 	closed   bool
 	ctx      context.Context
 	cancel   context.CancelFunc
 }
 
-// NewClient creates a new RabbitMQ client
-func NewClient(config *Config) (*Client, error) {
+// NewClient creates a new RabbitMQ client with a custom logger configuration
+func NewClient(config *Config, logger *logx.Logger) (*Client, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -36,51 +38,90 @@ func NewClient(config *Config) (*Client, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	if logger == nil {
+		cancel()
+		return nil, fmt.Errorf("logger is mandatory and cannot be nil")
+	}
+
 	client := &Client{
 		config: config,
+		logger: logger,
 		ctx:    ctx,
 		cancel: cancel,
 	}
 
 	// Initialize connection
+	client.logger.Info("connecting to RabbitMQ",
+		logx.String("url", config.URL),
+		logx.Int("max_connections", config.MaxConnections),
+		logx.Int("max_channels", config.MaxChannels),
+	)
+
 	if err := client.connect(); err != nil {
+		client.logger.Error("failed to connect to RabbitMQ",
+			logx.String("url", config.URL),
+			logx.ErrorField(err),
+		)
 		cancel()
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
 
+	client.logger.Info("successfully connected to RabbitMQ",
+		logx.String("url", config.URL),
+	)
+
 	// Initialize producer
-	producer, err := NewProducer(client.conn, &config.ProducerConfig)
+	client.logger.Info("initializing producer")
+	producer, err := NewProducer(client.conn, &config.ProducerConfig, client.logger)
 	if err != nil {
+		client.logger.Error("failed to create producer", logx.ErrorField(err))
 		client.Close()
 		return nil, fmt.Errorf("failed to create producer: %w", err)
 	}
 	client.producer = producer
+	client.logger.Info("producer initialized successfully")
 
 	// Initialize consumer
-	consumer, err := NewConsumer(client.conn, &config.ConsumerConfig)
+	client.logger.Info("initializing consumer")
+	consumer, err := NewConsumer(client.conn, &config.ConsumerConfig, client.logger)
 	if err != nil {
+		client.logger.Error("failed to create consumer", logx.ErrorField(err))
 		client.Close()
 		return nil, fmt.Errorf("failed to create consumer: %w", err)
 	}
 	client.consumer = consumer
+	client.logger.Info("consumer initialized successfully")
 
 	// Initialize health checker
-	client.health = NewHealthChecker(client.conn, config.HealthCheckInterval)
+	client.logger.Info("initializing health checker",
+		logx.String("interval", config.HealthCheckInterval.String()),
+	)
+	client.health = NewHealthChecker(client.conn, config.HealthCheckInterval, nil)
+	client.logger.Info("health checker initialized successfully")
 
 	return client, nil
 }
 
 // connect establishes connection to RabbitMQ
 func (c *Client) connect() error {
+	c.logger.Debug("establishing RabbitMQ connection",
+		logx.String("url", c.config.URL),
+	)
+
 	conn, err := rabbitmq.NewConn(
 		c.config.URL,
 		rabbitmq.WithConnectionOptionsLogging,
 	)
 	if err != nil {
+		c.logger.Error("connection failed",
+			logx.String("url", c.config.URL),
+			logx.ErrorField(err),
+		)
 		return NewConnectionError("failed to connect to RabbitMQ", c.config.URL, 1, err)
 	}
 
 	c.conn = conn
+	c.logger.Debug("connection established successfully")
 	return nil
 }
 
@@ -134,46 +175,115 @@ func (c *Client) checkClosedAndGetComponent(componentName string) (interface{}, 
 
 // Publish publishes a message to RabbitMQ
 func (c *Client) Publish(ctx context.Context, msg *Message) error {
+	c.logger.Debug("publishing message",
+		logx.String("message_id", msg.ID),
+		logx.String("routing_key", msg.Properties.RoutingKey),
+		logx.Int("size_bytes", len(msg.Body)),
+	)
+
 	component, err := c.checkClosedAndGetComponent("producer")
 	if err != nil {
+		c.logger.Error("failed to get producer component", logx.ErrorField(err))
 		return err
 	}
 
 	producer := component.(*Producer)
-	return producer.Publish(ctx, msg)
+	err = producer.Publish(ctx, msg)
+	if err != nil {
+		c.logger.Error("message publish failed",
+			logx.String("message_id", msg.ID),
+			logx.String("routing_key", msg.Properties.RoutingKey),
+			logx.ErrorField(err),
+		)
+	} else {
+		c.logger.Debug("message published successfully",
+			logx.String("message_id", msg.ID),
+			logx.String("routing_key", msg.Properties.RoutingKey),
+		)
+	}
+	return err
 }
 
 // PublishBatch publishes a batch of messages to RabbitMQ
 func (c *Client) PublishBatch(ctx context.Context, batch *BatchMessage) error {
+	c.logger.Debug("publishing batch",
+		logx.Int("batch_size", len(batch.Messages)),
+	)
+
 	component, err := c.checkClosedAndGetComponent("producer")
 	if err != nil {
+		c.logger.Error("failed to get producer component", logx.ErrorField(err))
 		return err
 	}
 
 	producer := component.(*Producer)
-	return producer.PublishBatch(ctx, batch)
+	err = producer.PublishBatch(ctx, batch)
+	if err != nil {
+		c.logger.Error("batch publish failed",
+			logx.Int("batch_size", len(batch.Messages)),
+			logx.ErrorField(err),
+		)
+	} else {
+		c.logger.Debug("batch published successfully",
+			logx.Int("batch_size", len(batch.Messages)),
+		)
+	}
+	return err
 }
 
 // Consume starts consuming messages from a queue
 func (c *Client) Consume(ctx context.Context, queue string, handler MessageHandler) error {
+	c.logger.Info("starting message consumption",
+		logx.String("queue", queue),
+	)
+
 	component, err := c.checkClosedAndGetComponent("consumer")
 	if err != nil {
+		c.logger.Error("failed to get consumer component", logx.ErrorField(err))
 		return err
 	}
 
 	consumer := component.(*Consumer)
-	return consumer.Consume(ctx, queue, handler)
+	err = consumer.Consume(ctx, queue, handler)
+	if err != nil {
+		c.logger.Error("failed to start consuming",
+			logx.String("queue", queue),
+			logx.ErrorField(err),
+		)
+	} else {
+		c.logger.Info("message consumption started successfully",
+			logx.String("queue", queue),
+		)
+	}
+	return err
 }
 
 // ConsumeWithOptions starts consuming messages with custom options
 func (c *Client) ConsumeWithOptions(ctx context.Context, queue string, handler MessageHandler, options *ConsumeOptions) error {
+	c.logger.Info("starting message consumption with options",
+		logx.String("queue", queue),
+		logx.Any("options", options),
+	)
+
 	component, err := c.checkClosedAndGetComponent("consumer")
 	if err != nil {
+		c.logger.Error("failed to get consumer component", logx.ErrorField(err))
 		return err
 	}
 
 	consumer := component.(*Consumer)
-	return consumer.ConsumeWithOptions(ctx, queue, handler, options)
+	err = consumer.ConsumeWithOptions(ctx, queue, handler, options)
+	if err != nil {
+		c.logger.Error("failed to start consuming with options",
+			logx.String("queue", queue),
+			logx.ErrorField(err),
+		)
+	} else {
+		c.logger.Info("message consumption with options started successfully",
+			logx.String("queue", queue),
+		)
+	}
+	return err
 }
 
 // IsHealthy returns true if the client is healthy
@@ -224,9 +334,11 @@ func (c *Client) Close() error {
 	defer c.mu.Unlock()
 
 	if c.closed {
+		c.logger.Debug("client already closed")
 		return nil
 	}
 
+	c.logger.Info("closing client and all resources")
 	c.closed = true
 	c.cancel()
 
@@ -234,36 +346,57 @@ func (c *Client) Close() error {
 
 	// Close producer
 	if c.producer != nil {
+		c.logger.Debug("closing producer")
 		if err := c.producer.Close(); err != nil {
+			c.logger.Error("failed to close producer", logx.ErrorField(err))
 			errs = append(errs, fmt.Errorf("failed to close producer: %w", err))
+		} else {
+			c.logger.Debug("producer closed successfully")
 		}
 	}
 
 	// Close consumer
 	if c.consumer != nil {
+		c.logger.Debug("closing consumer")
 		if err := c.consumer.Close(); err != nil {
+			c.logger.Error("failed to close consumer", logx.ErrorField(err))
 			errs = append(errs, fmt.Errorf("failed to close consumer: %w", err))
+		} else {
+			c.logger.Debug("consumer closed successfully")
 		}
 	}
 
 	// Close health checker
 	if c.health != nil {
+		c.logger.Debug("closing health checker")
 		if err := c.health.Close(); err != nil {
+			c.logger.Error("failed to close health checker", logx.ErrorField(err))
 			errs = append(errs, fmt.Errorf("failed to close health checker: %w", err))
+		} else {
+			c.logger.Debug("health checker closed successfully")
 		}
 	}
 
 	// Close connection
 	if c.conn != nil {
+		c.logger.Debug("closing connection")
 		if err := c.conn.Close(); err != nil {
+			c.logger.Error("failed to close connection", logx.ErrorField(err))
 			errs = append(errs, fmt.Errorf("failed to close connection: %w", err))
+		} else {
+			c.logger.Debug("connection closed successfully")
 		}
 	}
 
 	if len(errs) > 0 {
+		c.logger.Error("errors occurred during close",
+			logx.Int("error_count", len(errs)),
+			logx.Any("errors", errs),
+		)
 		return fmt.Errorf("errors during close: %v", errs)
 	}
 
+	c.logger.Info("client closed successfully")
 	return nil
 }
 
@@ -311,21 +444,21 @@ func (c *Client) Reconnect() error {
 	c.closed = false
 
 	// Recreate producer
-	producer, err := NewProducer(c.conn, &c.config.ProducerConfig)
+	producer, err := NewProducer(c.conn, &c.config.ProducerConfig, c.logger)
 	if err != nil {
 		return NewConnectionError("failed to recreate producer", c.config.URL, 1, err)
 	}
 	c.producer = producer
 
 	// Recreate consumer
-	consumer, err := NewConsumer(c.conn, &c.config.ConsumerConfig)
+	consumer, err := NewConsumer(c.conn, &c.config.ConsumerConfig, c.logger)
 	if err != nil {
 		return NewConnectionError("failed to recreate consumer", c.config.URL, 1, err)
 	}
 	c.consumer = consumer
 
 	// Recreate health checker
-	c.health = NewHealthChecker(c.conn, c.config.HealthCheckInterval)
+	c.health = NewHealthChecker(c.conn, c.config.HealthCheckInterval, nil)
 
 	return nil
 }

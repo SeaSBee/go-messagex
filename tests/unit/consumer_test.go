@@ -4,11 +4,18 @@ import (
 	"context"
 	"testing"
 
+	"github.com/seasbee/go-logx"
 	"github.com/seasbee/go-messagex/pkg/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/wagslane/go-rabbitmq"
 )
+
+// createConsumerTestLogger creates a test logger for consumer tests
+func createConsumerTestLogger() *logx.Logger {
+	logger, _ := logx.NewLogger()
+	return logger
+}
 
 // MockRabbitMQConn is a mock for rabbitmq.Conn
 type MockRabbitMQConn struct {
@@ -80,7 +87,7 @@ func TestNewConsumer(t *testing.T) {
 	t.Run("error with nil connection", func(t *testing.T) {
 		config := messaging.DefaultConsumerConfig()
 
-		consumer, err := messaging.NewConsumer(nil, &config)
+		consumer, err := messaging.NewConsumer(nil, &config, createConsumerTestLogger())
 
 		assert.Nil(t, consumer)
 		assert.Error(t, err)
